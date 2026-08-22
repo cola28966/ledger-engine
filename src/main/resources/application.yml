@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: ledger-engine
+
+  # 默认 H2 内存库，开箱即跑，每次启动重建（教学项目不需要持久化）
+  datasource:
+    url: jdbc:h2:mem:ledger;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      data-locations: classpath:data.sql
+
+logging:
+  level:
+    com.payment.ledger: DEBUG
+
+---
+# 切到真实 MySQL：mvn spring-boot:run -Dspring-boot.run.profiles=mysql
+spring:
+  config:
+    activate:
+      on-profile: mysql
+  datasource:
+    url: jdbc:mysql://localhost:3306/ledger?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: root
+  sql:
+    init:
+      mode: never   # 生产环境不自动建表
