@@ -34,6 +34,8 @@ public class AccountRepository {
         a.setFrozenBalance(rs.getLong("frozen_balance"));
         a.setStatus(rs.getString("status"));
         a.setAllowNegative(rs.getBoolean("allow_negative"));
+        a.setBucketCount(rs.getInt("bucket_count"));
+        a.setParentAccountNo(rs.getString("parent_account_no"));
         a.setVersion(rs.getInt("version"));
         return a;
     };
@@ -72,6 +74,49 @@ public class AccountRepository {
                  WHERE s.subject_type = ?
                 """, Long.class, subjectType);
         return v == null ? 0L : v;
+    }
+
+    /** 查出所有配置了分桶的逻辑主户 */
+    public List<Account> findBucketedAccounts() {
+        return jdbc.query("SELECT * FROM account WHERE bucket_count > 0", MAPPER);
+    }
+
+    /**
+     * 逻辑主户的真实余额 = 主户自身余额 + 所有子桶余额之和。
+     *
+     * <p>分桶把一行拆成了 N 行，写入并行了，但读取就得聚合。
+     * 这是分桶的代价：<b>写变快，读变慢</b>。
+     * 所以只对"高频写、低频读"的账户分桶——手续费收入户没人实时看，
+     * 用户余额户则绝对不能分桶。
+     */
+    public long sumLogicalBalance(String logicalAccountNo) {
+        Long v = jdbc.queryForObject("""
+                SELECT COALESCE(SUM(balance), 0) FROM account
+                 WHERE account_no = ? OR parent_account_no = ?
+                """, Long.class, logicalAccountNo, logicalAccountNo);
+        return v == null ? 0L : v;
+    }
+
+    public int updateBucketCount(String accountNo, int bucketCount) {
+        return jdbc.update("UPDATE account SET bucket_count = ?, updated_at = ? WHERE account_no = ?",
+                bucketCount, LocalDateTime.now(), accountNo);
+    }
+
+    /** 创建一个子桶账户（幂等：已存在则跳过） */
+    public void createBucketIfAbsent(Account parent, String bucketNo) {
+        if (findByNo(bucketNo) != null) {
+            return;
+        }
+        jdbc.update("""
+                INSERT INTO account (account_no, account_name, subject_code, owner_id,
+                                     account_type, currency, balance_direction,
+                                     bucket_count, parent_account_no, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,0,?,?,?)
+                """,
+                bucketNo, parent.getAccountName() + "#" + bucketNo.substring(bucketNo.length() - 2),
+                parent.getSubjectCode(), parent.getOwnerId(), parent.getAccountType(),
+                parent.getCurrency(), parent.getBalanceDirection().name(),
+                parent.getAccountNo(), LocalDateTime.now(), LocalDateTime.now());
     }
 
     /** 找出违反 balance = available + frozen 的账户 */

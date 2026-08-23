@@ -38,29 +38,37 @@ INSERT INTO subject VALUES ('660101', '营销费用-红包补贴',   '6601', 'EX
 -- ============================================================
 
 -- 内部户 —— 资产类
-INSERT INTO account VALUES ('BANK_RESERVE',  '备付金存管户',      '100101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('CHANNEL_RECV',  '应收渠道款-银联',   '112201', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('MERCHANT_RECV', '应收商户垫付款',    '112202', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+INSERT INTO account (account_no, account_name, subject_code, owner_id, account_type, currency, balance_direction, bucket_count, created_at, updated_at) VALUES
+  ('BANK_RESERVE',  '备付金存管户',    '100101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, NOW(), NOW()),
+  ('CHANNEL_RECV',  '应收渠道款-银联', '112201', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, NOW(), NOW()),
+  ('MERCHANT_RECV', '应收商户垫付款',  '112202', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, NOW(), NOW());
 
 -- 内部户 —— 中间过渡户
-INSERT INTO account VALUES ('ESCROW',        '担保交易中间户',    '224103', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('WD_TRANSIT',    '提现在途户',        '224104', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+INSERT INTO account (account_no, account_name, subject_code, owner_id, account_type, currency, balance_direction, bucket_count, created_at, updated_at) VALUES
+  ('ESCROW',     '担保交易中间户', '224103', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, NOW(), NOW()),
+  ('WD_TRANSIT', '提现在途户',     '224104', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, NOW(), NOW());
 
 -- 内部户 —— 损益类
-INSERT INTO account VALUES ('FEE_INCOME',    '支付手续费收入户',  '600101', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('WD_FEE_INCOME', '提现手续费收入户',  '600102', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('CHANNEL_COST',  '渠道通道成本户',    '640101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('CHANNEL_PAY',   '应付渠道手续费',    '220201', 'PLATFORM', 'INTERNAL', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('SUBSIDY',       '营销补贴费用户',    '660101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+-- FEE_INCOME 是全系统最热的一行：每一笔消费的手续费都往这里记。
+-- 这里默认 bucket_count = 0（不分桶），由压测在运行时开启，以便对比前后差异。
+INSERT INTO account (account_no, account_name, subject_code, owner_id, account_type, currency, balance_direction, bucket_count, created_at, updated_at) VALUES
+  ('FEE_INCOME',    '支付手续费收入户', '600101', 'PLATFORM', 'INTERNAL', 'CNY', 'CR',  0, NOW(), NOW()),
+  ('WD_FEE_INCOME', '提现手续费收入户', '600102', 'PLATFORM', 'INTERNAL', 'CNY', 'CR',  0, NOW(), NOW()),
+  ('CHANNEL_COST',  '渠道通道成本户',   '640101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR',  0, NOW(), NOW()),
+  ('CHANNEL_PAY',   '应付渠道手续费',   '220201', 'PLATFORM', 'INTERNAL', 'CNY', 'CR',  0, NOW(), NOW()),
+  ('SUBSIDY',       '营销补贴费用户',   '660101', 'PLATFORM', 'INTERNAL', 'CNY', 'DR',  0, NOW(), NOW());
 
--- 用户户
-INSERT INTO account VALUES ('U0001', '用户A余额户', '224101', 'U0001', 'USER', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('U0002', '用户B余额户', '224101', 'U0002', 'USER', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+-- 用户户：天然分散，不需要分桶
+INSERT INTO account (account_no, account_name, subject_code, owner_id, account_type, currency, balance_direction, bucket_count, created_at, updated_at) VALUES
+  ('U0001', '用户A余额户', '224101', 'U0001', 'USER', 'CNY', 'CR', 0, NOW(), NOW()),
+  ('U0002', '用户B余额户', '224101', 'U0002', 'USER', 'CNY', 'CR', 0, NOW(), NOW());
 
 -- 商户户
-INSERT INTO account VALUES ('M0001',        '商户M待结算户', '224102', 'M0001', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('M0001_DEPOSIT','商户M保证金户', '224105', 'M0001', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
-INSERT INTO account VALUES ('M0002',        '商户N待结算户', '224102', 'M0002', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+-- M0001 模拟头部大商户：所有交易都收款到它，同样是热点。同上，默认不分桶。
+INSERT INTO account (account_no, account_name, subject_code, owner_id, account_type, currency, balance_direction, bucket_count, created_at, updated_at) VALUES
+  ('M0001',         '商户M待结算户', '224102', 'M0001', 'MERCHANT', 'CNY', 'CR',  0, NOW(), NOW()),
+  ('M0001_DEPOSIT', '商户M保证金户', '224105', 'M0001', 'MERCHANT', 'CNY', 'CR',  0, NOW(), NOW()),
+  ('M0002',         '商户N待结算户', '224102', 'M0002', 'MERCHANT', 'CNY', 'CR',  0, NOW(), NOW());
 
 
 -- ============================================================

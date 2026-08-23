@@ -49,6 +49,7 @@ public class AccountingEngine {
     private final BalanceValidator validator;
     private final FeeValidator feeValidator;
     private final AccountingCalendar calendar;
+    private final HotAccountRouter router;
     private final TransactionTemplate tx;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -62,6 +63,7 @@ public class AccountingEngine {
                             BalanceValidator validator,
                             FeeValidator feeValidator,
                             AccountingCalendar calendar,
+                            HotAccountRouter router,
                             PlatformTransactionManager txManager) {
         this.accountRepo = accountRepo;
         this.voucherRepo = voucherRepo;
@@ -71,6 +73,7 @@ public class AccountingEngine {
         this.validator = validator;
         this.feeValidator = feeValidator;
         this.calendar = calendar;
+        this.router = router;
         this.tx = new TransactionTemplate(txManager);
     }
 
@@ -127,6 +130,10 @@ public class AccountingEngine {
         // 2. 借贷平衡校验 —— 不平衡的分录永远不允许落库
         long totalAmount = validator.validate(entries);
 
+        // 2.5 热点账户路由：把逻辑主户换成具体的桶账号。
+        //     只换账号、不动方向和金额，所以平衡性不受影响。
+        entries = routeToBuckets(entries, req.getRequestId());
+
         // 3. 写凭证（第 2 层：request_id 唯一索引在这里拦住并发重复）
         String voucherNo = nextVoucherNo(req.getAccountingDate());
         Voucher v = new Voucher();
@@ -141,13 +148,69 @@ public class AccountingEngine {
         voucherRepo.insert(v);
 
         // 4. 逐条落地：改余额 + 写分录 + 写流水（全部在同一事务内）
-        int seq = 1;
-        for (EntryCommand cmd : entries) {
-            applyEntry(voucherNo, req.getBizType(), req.getAccountingDate(), cmd, seq++);
-        }
+        applyEntriesInLockOrder(voucherNo, req.getBizType(), req.getAccountingDate(), entries);
 
         log.info("记账成功: voucherNo={}, bizType={}, amount={}", voucherNo, req.getBizType(), totalAmount);
         return BookingResult.success(voucherNo);
+    }
+
+    /**
+     * 把逻辑热点账户替换成具体的桶账号。
+     *
+     * <p>路由键固定用 {@code requestId}：幂等重试时同一请求必须落回同一个桶，
+     * 否则重试会在另一个桶上再记一笔。
+     */
+    private List<EntryCommand> routeToBuckets(List<EntryCommand> entries, String requestId) {
+        return entries.stream()
+                .map(c -> router.isBucketed(c.getAccountNo())
+                        ? new EntryCommand(router.route(c.getAccountNo(), requestId),
+                                           c.getDirection(), c.getAmount())
+                        : c)
+                .toList();
+    }
+
+    /**
+     * 按<b>固定的账号顺序</b>依次更新余额，避免并发死锁。
+     *
+     * <p>压测实测：转账场景下 {@code A→B} 与 {@code B→A} 同时发生时，
+     * 两个事务的加锁顺序相反，MySQL 上有 <b>25% 的请求因死锁被回滚</b>。
+     *
+     * @param entries 分录组。其在列表中的原始位置即 entry_seq（业务语义顺序：借在前、贷在后）
+     */
+    private void applyEntriesInLockOrder(String voucherNo, BizType bizType,
+                                         LocalDate accountingDate, List<EntryCommand> entries) {
+        // ══════════════════════════════════════════════════════════════
+        //  TODO 11 —— 由你实现（验收：DeadlockTest）
+        //
+        //  逐条调用 applyEntry(voucherNo, bizType, accountingDate, cmd, seq)，
+        //  但要同时满足两个互相矛盾的要求：
+        //
+        //   a) 落库的 entry_seq 必须保持<b>业务语义顺序</b>——
+        //      即分录在 entries 里的原始下标 + 1（借方在前、贷方在后，
+        //      财务看凭证时要能按这个顺序读）
+        //
+        //   b) 实际执行 applyEntry 的顺序，必须按 <b>accountNo 的固定顺序</b>
+        //      （字典序即可）——让任意两个并发事务的加锁路径一致，环就成不了
+        //
+        //  提示：先把 (原始seq, cmd) 配成对，再按 accountNo 排序，
+        //        遍历时用配好的 seq 而不是循环下标。
+        //
+        //  ── 为什么固定顺序能消除死锁 ─────────────────────────
+        //   死锁的成因是"环"：事务1 持有 A 等 B，事务2 持有 B 等 A。
+        //   若所有事务都按同一顺序申请锁（都先 A 后 B），
+        //   后来者只会在第一把锁上排队等待，永远形成不了环。
+        //   这是并发编程里最经典的死锁预防手段，代价只是一次排序。
+        //
+        //  ── 顺带想一层 ───────────────────────────────────────
+        //   为什么 CONSUME 从来不死锁，而 TRANSFER 会？
+        //   因为 CONSUME 的分录顺序恒定是 用户户 → 商户户 → 手续费户，
+        //   所有事务天然一致。它不死锁是运气，不是设计——
+        //   哪天有人调整了 EntryGenerator 里的分录顺序，它也会开始死锁。
+        //   这个方法就是把"运气"变成"保证"。
+        //
+        //  跑测试：mvn test -Dtest=DeadlockTest
+        // ══════════════════════════════════════════════════════════════
+        throw new UnsupportedOperationException("TODO 11: 实现按账号顺序加锁");
     }
 
     /**
@@ -268,10 +331,9 @@ public class AccountingEngine {
         v.setRemark("冲正 " + origin.getVoucherNo());
         voucherRepo.insert(v);
 
-        int seq = 1;
-        for (EntryCommand cmd : reversed) {
-            applyEntry(voucherNo, origin.getBizType(), accountingDate, cmd, seq++);
-        }
+        // 冲正不再路由：原分录里记的已经是具体的桶账号，
+        // 必须原样冲回同一个桶，否则钱会从别的桶里扣走
+        applyEntriesInLockOrder(voucherNo, origin.getBizType(), accountingDate, reversed);
 
         // 原凭证只打标记，不修改任何金额，形成完整审计链
         int rows = voucherRepo.markReversed(origin.getVoucherNo(), voucherNo);

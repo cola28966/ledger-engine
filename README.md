@@ -69,7 +69,57 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 7、8 做完，`AccountingEngineTest` 和 `LedgerInvariantTest` 才会恢复绿——
 记账主流程现在会先过这两道防线。
 
-全部做完：**75 个测试**应当全绿。
+### 阶段 3 · 并发
+
+| # | 位置 | 内容 | 验收 |
+|---|---|---|---|
+| 11 | `AccountingEngine.applyEntriesInLockOrder()` | 按账号固定顺序加锁，消除死锁 | `-Dtest=DeadlockTest` |
+| 12 | `HotAccountRouter.route()` | 热点账户分桶路由 | `-Dtest=HotAccountRouterTest` |
+
+全部做完：**85 个测试**应当全绿。
+
+## 压测
+
+热点效应在 H2 内存库上测不出来（行锁持有时间是微秒级，实测只差 1.13x），
+必须用真实数据库。
+
+1. 建库并执行 `schema.sql` + `data.sql`
+2. 创建 `src/main/resources/application-perf.yml`（**该文件已在 .gitignore 中，勿提交**）：
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://<host>:<port>/<db>?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: <user>
+    password: <password>
+    hikari:
+      maximum-pool-size: 40   # 必须大于压测线程数，否则瓶颈变成"等连接"
+  sql:
+    init:
+      mode: never
+```
+
+3. 运行：
+
+```bash
+SPRING_PROFILES_ACTIVE=perf mvn test -Dtest=HotAccountBenchmarkTest
+```
+
+### 实测结果（MySQL 5.7，16 线程 × 60 笔）
+
+```
+场景                    耗时(ms)     成功    失败      TPS
+──────────────────────────────────────────────────────
+无热点-TRANSFER            15,106     960       0       64
+有热点-不分桶             190,074     960       0        5
+有热点-分16桶              20,193     960       0       48
+
+分桶带来的提升: 9.41x  (TPS 5 → 48)
+热点差距: 不分桶 12.58x  →  分桶后 1.34x
+```
+
+修复死锁前，TRANSFER 一栏在 MySQL 上有 **243/960（25%）** 因死锁回滚。
 
 ## 几条贯穿全局的约束
 

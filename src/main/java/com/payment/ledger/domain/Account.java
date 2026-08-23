@@ -48,6 +48,17 @@ public class Account {
      */
     private boolean allowNegative;
 
+    /**
+     * 热点分桶数。0 表示不分桶。
+     * <p>&gt;0 表示这是一个"逻辑主户"：它自己不参与记账，真实余额分散在
+     * N 个子桶账户上，记账时按 requestId 哈希路由到某一桶。
+     * 目的是把所有请求争抢的那一行，拆成 N 行并行更新。
+     */
+    private int bucketCount;
+
+    /** 桶账户指向其逻辑主户；主户和普通账户为 null */
+    private String parentAccountNo;
+
     private int version;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

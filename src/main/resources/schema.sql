@@ -3,9 +3,12 @@
 -- 兼容 H2 (MODE=MySQL) 与 MySQL 8.x
 -- ============================================================
 
+DROP TABLE IF EXISTS balance_snapshot;
 DROP TABLE IF EXISTS account_serial;
 DROP TABLE IF EXISTS accounting_entry;
 DROP TABLE IF EXISTS voucher;
+DROP TABLE IF EXISTS fee_rule;
+DROP TABLE IF EXISTS accounting_calendar;
 DROP TABLE IF EXISTS account;
 DROP TABLE IF EXISTS subject;
 
@@ -48,13 +51,20 @@ CREATE TABLE account (
     status            VARCHAR(16)  NOT NULL DEFAULT 'NORMAL',
     -- 是否允许余额为负。仅极少数内部过渡户可为 TRUE，用户户/商户户永远 FALSE
     allow_negative    BOOLEAN      NOT NULL DEFAULT FALSE,
+    -- 热点分桶数。0 表示不分桶；>0 表示该账户是"逻辑主户"，
+    -- 真实余额分散在 N 个子桶上，记账时按 requestId 哈希路由到某一桶。
+    -- 目的：把所有请求争抢的那一行，拆成 N 行并行更新。
+    bucket_count      INT          NOT NULL DEFAULT 0,
+    -- 桶账户指向其逻辑主户；主户和普通账户为 NULL
+    parent_account_no VARCHAR(32),
     version           INT          NOT NULL DEFAULT 0,
-    created_at        TIMESTAMP    NOT NULL,
-    updated_at        TIMESTAMP    NOT NULL,
+    created_at        DATETIME     NOT NULL,
+    updated_at        DATETIME     NOT NULL,
     PRIMARY KEY (account_no)
 );
 
 CREATE INDEX idx_account_owner ON account (owner_id);
+CREATE INDEX idx_account_parent ON account (parent_account_no);
 
 -- ------------------------------------------------------------
 -- 3. 记账凭证表：一次记账请求 = 一张凭证 = 一组分录
@@ -75,7 +85,7 @@ CREATE TABLE voucher (
     -- 本凭证被哪张凭证冲正了
     reversed_by     VARCHAR(40),
     remark          VARCHAR(255),
-    created_at      TIMESTAMP    NOT NULL,
+    created_at      DATETIME     NOT NULL,
     PRIMARY KEY (voucher_no),
     CONSTRAINT uk_voucher_request UNIQUE (request_id)
 );
@@ -95,7 +105,7 @@ CREATE TABLE accounting_entry (
     direction       VARCHAR(2)   NOT NULL,
     amount          BIGINT       NOT NULL,
     accounting_date DATE         NOT NULL,
-    created_at      TIMESTAMP    NOT NULL,
+    created_at      DATETIME     NOT NULL,
     PRIMARY KEY (entry_id)
 );
 
@@ -119,7 +129,7 @@ CREATE TABLE account_serial (
     balance_after   BIGINT       NOT NULL,
     biz_type        VARCHAR(32),
     accounting_date DATE         NOT NULL,
-    created_at      TIMESTAMP    NOT NULL,
+    created_at      DATETIME     NOT NULL,
     PRIMARY KEY (serial_no)
 );
 
@@ -134,8 +144,8 @@ CREATE TABLE accounting_calendar (
     accounting_date DATE         NOT NULL,
     -- OPEN 开放记账 / CUTTING 日切中（暂停记账）/ CLOSED 已关账（禁止追溯）
     status          VARCHAR(16)  NOT NULL,
-    opened_at       TIMESTAMP,
-    closed_at       TIMESTAMP,
+    opened_at       DATETIME,
+    closed_at       DATETIME,
     PRIMARY KEY (accounting_date)
 );
 
@@ -177,6 +187,6 @@ CREATE TABLE balance_snapshot (
     debit_amount    BIGINT       NOT NULL,
     credit_amount   BIGINT       NOT NULL,
     closing_balance BIGINT       NOT NULL,
-    created_at      TIMESTAMP    NOT NULL,
+    created_at      DATETIME     NOT NULL,
     PRIMARY KEY (accounting_date, account_no)
 );
