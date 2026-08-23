@@ -29,6 +29,8 @@ public class FeeValidator {
     /** 基点分母：1 bp = 万分之一 */
     private static final long BP_DENOMINATOR = 10_000L;
 
+    private static final long BP_HALF_DENOMINATOR = BP_DENOMINATOR / 2;
+
     private final FeeRuleRepository ruleRepo;
 
     public FeeValidator(FeeRuleRepository ruleRepo) {
@@ -75,38 +77,29 @@ public class FeeValidator {
      * <p>计算链：{@code 基点试算 → 取整 → 保底 → 封顶}
      */
     long calculateByRule(FeeRule rule, long amount) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 7 —— 由你实现（验收：FeeValidatorTest，14 个用例）
-        //
-        //  计算链：基点试算 → 取整 → 保底 → 封顶
-        //
-        //  a) 基点试算：fee = amount × rateBp ÷ 10000
-        //     全程整数运算，一个浮点都不许出现。
-        //     用 Math.multiplyExact 做乘法 —— 溢出时抛异常，而不是像 `*`
-        //     那样静默回绕（还记得 int debit 那个 bug 吗，同一个道理）。
-        //
-        //  b) 取整，按 rule.getRoundingMode()：
-        //       DOWN    截断      → 直接整除
-        //       UP      向上取整  → 有余数就进一
-        //       HALF_UP 四舍五入  → 想想加上"半个分母"再整除会发生什么
-        //     提示：这三种都能用纯整数加减和整除表达，不需要 Math.round，
-        //           更不需要转成 double。
-        //
-        //  c) 保底：算出来低于 rule.getMinFee() 时，取保底额
-        //  d) 封顶：rule.getMaxFee() 不为 null 且超过它时，压到封顶额
-        //
-        //  ── 顺序陷阱 ──────────────────────────────────────────
-        //   先保底再封顶，顺序不能反。想想 minFee=100、maxFee=50 这种
-        //   矛盾配置下，两种顺序会得到不同结果——虽然是脏配置，但系统
-        //   的行为必须是确定的、可复现的。
-        //
-        //  ── 为什么费率要用基点(bp)存整数 ─────────────────────
-        //   0.6% 若用 double 存 0.006，这个值在二进制里本身就不精确，
-        //   乘出来的手续费会带上误差，日积月累对账必然出现分位差。
-        //   基点是整数：0.6% = 60 bp，全程精确。
-        //
-        //  跑测试：mvn test -Dtest=FeeValidatorTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 7: 实现手续费计算");
+        int rateBp = rule.getRateBp();
+        long numerator = Math.multiplyExact(amount, rateBp);
+
+        long fee =  switch (rule.getRoundingMode()) {
+            case DOWN -> numerator / BP_DENOMINATOR;
+
+            case UP -> {
+                long quotient = numerator / BP_DENOMINATOR;
+                long remainder = numerator % BP_DENOMINATOR;
+                yield remainder == 0 ? quotient : quotient + 1;
+            }
+
+            case HALF_UP -> (numerator + BP_HALF_DENOMINATOR) / BP_DENOMINATOR;
+
+        };
+
+        if(fee < rule.getMinFee()) {
+            fee =  rule.getMinFee();
+        }
+        if(rule.getMaxFee() != null && fee > rule.getMaxFee()) {
+            fee = rule.getMaxFee();
+        }
+
+        return fee;
     }
 }

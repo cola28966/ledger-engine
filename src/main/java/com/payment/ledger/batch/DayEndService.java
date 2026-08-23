@@ -7,6 +7,7 @@ import com.payment.ledger.engine.EntryGenerator;
 import com.payment.ledger.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -107,26 +108,17 @@ public class DayEndService {
      * ② 试算平衡：当日全部分录的借方合计必须等于贷方合计。
      */
     CheckResult checkTrialBalance(LocalDate date) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 9 —— 由你实现（验收：DayEndServiceTest.trialBalanceFailureBlocksDayEnd）
-        //
-        //  a) 用 entryRepo.sumByDirection(date, Direction.DR / CR) 取当日
-        //     全部分录的借方合计和贷方合计
-        //  b) 相等 → CheckResult.pass(CHK_TRIAL_BALANCE, 描述)
-        //  c) 不等 → CheckResult.fail(...)，且 detail 里必须包含：
-        //       · 借方合计、贷方合计、差额（测试断言 "差额 500"）
-        //       · 用 entryRepo.findUnbalancedVouchers(date) 把组内不平的
-        //         凭证号一并列出（测试断言 detail 中出现 "V_BROKEN"）
-        //
-        //  ── 为什么要顺手把问题凭证捞出来 ─────────────────────
-        //   告警只说"借贷差了 500"，值班的人还得自己写 SQL 去找。
-        //   直接把凭证号打出来，排查从 30 分钟变成 30 秒。
-        //   如果 findUnbalancedVouchers 返回空，说明每张凭证组内都是平的、
-        //   但总数不平 —— 那是分录整行丢失，要往另一个方向查。
-        //
-        //  跑测试：mvn test -Dtest=DayEndServiceTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 9: 实现试算平衡校验");
+        long debit = entryRepo.sumByDirection(date, Direction.DR);
+        long credit = entryRepo.sumByDirection(date, Direction.CR);
+        if(debit == credit) {
+            return CheckResult.pass(CHK_TRIAL_BALANCE, "当日全部分录的借方合计等于贷方合计，双方合计 " + debit);
+        }else {
+            List<String> unbalancedVouchers = entryRepo.findUnbalancedVouchers(date);
+            return CheckResult.fail(CHK_TRIAL_BALANCE, String.format(
+                    "借方 %d != 贷方 %d，差额 %d；组内不平的凭证: %s",
+                    debit, credit, debit - credit,
+                    unbalancedVouchers.isEmpty() ? "无（疑为分录整行丢失）" : unbalancedVouchers));
+        }
     }
 
     /**
@@ -171,40 +163,20 @@ public class DayEndService {
      * 实务中靠定期"手续费划转"把自有收入划到自有资金账户来恢复平衡。
      */
     CheckResult checkReserveInvariant() {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 10 —— 由你实现（验收：DayEndServiceTest 的两个备付金用例）
-        //
-        //  这就是你在第 14 题第 3 问写对的那条等式，现在变成代码。
-        //
-        //  可用的查询：
-        //    accountRepo.sumBalanceBySubjectPrefix("2241")
-        //        → 客户备付金类负债合计（科目 2241 开头）
-        //    accountRepo.findByNo(EntryGenerator.BANK_RESERVE).getBalance()
-        //        → 备付金存管账户余额
-        //    accountRepo.sumBalanceBySubjectType(SubjectType.INCOME.name())
-        //        → 已确认、尚未划转的自有收入
-        //
-        //  要校验的等式（想清楚为什么要减那一项）：
-        //      SUM(客户备付金类负债) == 存管户余额 - 未划转的自有收入
-        //
-        //  detail 里请带上三个数值：
-        //    通过时 → 测试断言包含 "未划转收入 180"
-        //    失败时 → 测试断言包含 "备付金勾稽失衡" 和 "差额 5000"
-        //
-        //  ── 为什么要减去收入 ──────────────────────────────────
-        //   平台每收一笔手续费，就把钱从"客户备付金"（负债）转成了
-        //   "手续费收入"（权益），但那笔钱还实实在在躺在备付金存管
-        //   账户里。客户备付金侧少了，银行侧没少，等式就失衡了。
-        //   实务中靠定期「手续费划转」把自有收入划到自有资金账户来恢复平衡：
-        //       借：银行存款-自有资金账户   XX
-        //           贷：银行存款-备付金存管户    XX
-        //
-        //  ── 这条等式的分量 ────────────────────────────────────
-        //   《非银行支付机构监督管理条例》：客户备付金不得挪用。
-        //   这不是一句口号，而是每天可计算、可校验、可告警的一条等式。
-        //   左右差一分钱，就必须查出来。
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 10: 实现备付金勾稽校验");
+        long totalCustomerReserveFundsBalance = accountRepo.sumBalanceBySubjectPrefix("2241");
+        long bankReserveBalance = accountRepo.findByNo(EntryGenerator.BANK_RESERVE).getBalance();
+        long subjectTyBalance = accountRepo.sumBalanceBySubjectType(SubjectType.INCOME.name());
+
+        if(totalCustomerReserveFundsBalance == bankReserveBalance - subjectTyBalance) {
+            return CheckResult.pass(CHK_RESERVE_INVARIANT, String.format(
+                    "客户备付金 %d = 存管户 %d - 未划转收入 %d",
+                    totalCustomerReserveFundsBalance, bankReserveBalance, subjectTyBalance));
+        }else {
+            return CheckResult.fail(CHK_RESERVE_INVARIANT, String.format(
+                    "客户备付金 %d = 存管户 %d - 未划转收入 %d 备付金勾稽失衡 差额 %d",
+                    totalCustomerReserveFundsBalance, bankReserveBalance, subjectTyBalance, totalCustomerReserveFundsBalance -bankReserveBalance + subjectTyBalance));
+
+        }
     }
 
     // ================================================================

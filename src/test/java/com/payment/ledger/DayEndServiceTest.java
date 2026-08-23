@@ -184,6 +184,32 @@ class DayEndServiceTest {
     }
 
     @Test
+    @DisplayName("试算不平时，必须报出真实的问题凭证号和借贷合计")
+    void trialBalanceReportsActualVoucherNo() {
+        normalBusiness();
+
+        // 换一个凭证号，模拟生产环境里真实的凭证编号
+        jdbc.update("""
+                INSERT INTO accounting_entry
+                    (voucher_no, entry_seq, account_no, subject_code,
+                     direction, amount, accounting_date, created_at)
+                VALUES (?,?,?,?,?,?,?,?)
+                """, "V20260822000000009527", 1, "U0001", "224101", "DR", 700,
+                Date.valueOf(D), LocalDateTime.now());
+
+        DayEndResult result = dayEnd.run(D);
+        String detail = result.check(CHK_TRIAL_BALANCE).detail();
+
+        assertThat(result.success()).isFalse();
+        // 报出的必须是查出来的那个凭证号
+        assertThat(detail).contains("V20260822000000009527");
+        assertThat(detail).contains("700");
+        // 借贷双方合计都要给出，值班的人才能判断偏在哪一侧
+        assertThat(detail).contains(String.valueOf(140700));   // 借方合计
+        assertThat(detail).contains(String.valueOf(140000));   // 贷方合计
+    }
+
+    @Test
     @DisplayName("★ 存在记账中的凭证 → 阻断日切（试算不平最高频的原因）")
     void processingVoucherBlocksDayEnd() {
         normalBusiness();
