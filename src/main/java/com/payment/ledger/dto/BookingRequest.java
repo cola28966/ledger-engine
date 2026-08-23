@@ -23,8 +23,19 @@ public class BookingRequest {
     private BizType bizType;
     private String bizOrderNo;
 
-    /** 会计日期。由上游传入或由会计日历裁定，绝不在引擎内部取 now() */
+    /**
+     * 会计日期。
+     * <p>传 null 表示交给 {@code AccountingCalendar} 裁定为当前会计日；
+     * 传了值则必须是未关账的会计日，否则拒绝。
+     * <b>引擎内部绝不取 now()。</b>
+     */
     private LocalDate accountingDate;
+
+    /**
+     * 商户号，用于匹配专属协议费率。
+     * <p>为 null 时走该业务类型的默认费率。
+     */
+    private String merchantId;
 
     /** 付款方账号（部分业务不需要，如提现成功） */
     private String payerAccount;

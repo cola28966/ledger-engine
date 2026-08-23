@@ -68,6 +68,20 @@ public class VoucherRepository {
      * <p>注意：只打标记，<b>绝不删除、绝不修改原凭证的金额</b>——
      * 账务数据是法定凭据，可变即失去公信力。
      */
+    /**
+     * 统计某会计日处于「记账中」的凭证数。
+     * <p>日切前必须为 0。这类凭证是"记账崩在中间"的残留，
+     * 也是日终试算不平时最高频的原因——一半以上的不平都出在这里。
+     */
+    public int countProcessing(java.time.LocalDate accountingDate) {
+        Integer c = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM voucher
+                 WHERE accounting_date = ? AND status = ?
+                """, Integer.class,
+                java.sql.Date.valueOf(accountingDate), VoucherStatus.PROCESSING.name());
+        return c == null ? 0 : c;
+    }
+
     public int markReversed(String voucherNo, String reverseVoucherNo) {
         return jdbc.update("""
                 UPDATE voucher SET status = ?, reversed_by = ?

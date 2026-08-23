@@ -49,6 +49,40 @@ public class AccountRepository {
     }
 
     /**
+     * 按科目编码前缀汇总余额。
+     * <p>备付金勾稽用：{@code sumBalanceBySubjectPrefix("2241")} 即客户备付金负债合计。
+     */
+    public long sumBalanceBySubjectPrefix(String subjectCodePrefix) {
+        Long v = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(balance), 0) FROM account WHERE subject_code LIKE ?",
+                Long.class, subjectCodePrefix + "%");
+        return v == null ? 0L : v;
+    }
+
+    /**
+     * 按科目类型汇总余额。
+     * <p>备付金勾稽用：{@code sumBalanceBySubjectType("INCOME")} 即已确认的自有收入，
+     * 这部分钱还躺在备付金账户里，尚未划转到自有资金账户。
+     */
+    public long sumBalanceBySubjectType(String subjectType) {
+        Long v = jdbc.queryForObject("""
+                SELECT COALESCE(SUM(a.balance), 0)
+                  FROM account a
+                  JOIN subject s ON a.subject_code = s.subject_code
+                 WHERE s.subject_type = ?
+                """, Long.class, subjectType);
+        return v == null ? 0L : v;
+    }
+
+    /** 找出违反 balance = available + frozen 的账户 */
+    public List<String> findInconsistentAccounts() {
+        return jdbc.queryForList("""
+                SELECT account_no FROM account
+                 WHERE balance <> available_balance + frozen_balance
+                """, String.class);
+    }
+
+    /**
      * 按余额方向对账户余额做增减，<b>并在同一条 SQL 内完成余额充足性校验</b>。
      *
      * <p><b>这是整个账务系统最关键的一条 SQL。</b>它把"检查余额是否充足"写进了

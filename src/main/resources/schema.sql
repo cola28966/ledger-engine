@@ -125,3 +125,58 @@ CREATE TABLE account_serial (
 
 CREATE INDEX idx_serial_account ON account_serial (account_no, accounting_date);
 CREATE INDEX idx_serial_voucher ON account_serial (voucher_no);
+
+-- ------------------------------------------------------------
+-- 6. 会计日历：会计日期的唯一权威来源
+--    绝不允许各模块各自 now()，否则跨日切必然串账
+-- ------------------------------------------------------------
+CREATE TABLE accounting_calendar (
+    accounting_date DATE         NOT NULL,
+    -- OPEN 开放记账 / CUTTING 日切中（暂停记账）/ CLOSED 已关账（禁止追溯）
+    status          VARCHAR(16)  NOT NULL,
+    opened_at       TIMESTAMP,
+    closed_at       TIMESTAMP,
+    PRIMARY KEY (accounting_date)
+);
+
+-- ------------------------------------------------------------
+-- 7. 计费规则：费率复核的依据
+--    费率用「基点 bp」存整数，万分之一为 1 bp —— 0.6% = 60 bp。
+--    绝不用 double 存 0.006，那是资损的开始。
+-- ------------------------------------------------------------
+CREATE TABLE fee_rule (
+    rule_id        BIGINT       AUTO_INCREMENT,
+    biz_type       VARCHAR(32)  NOT NULL,
+    -- NULL 表示该业务类型的默认规则；有值表示商户专属协议价
+    merchant_id    VARCHAR(64),
+    -- 基点：万分之一。60 = 0.6%
+    rate_bp        INT          NOT NULL,
+    -- 保底手续费（分）。小额交易按费率算出来可能不足一分，用它兜底
+    min_fee        BIGINT       NOT NULL DEFAULT 0,
+    -- 封顶手续费（分）。NULL 表示不封顶
+    max_fee        BIGINT,
+    -- 取整规则：HALF_UP 四舍五入 / UP 向上取整 / DOWN 截断
+    rounding_mode  VARCHAR(16)  NOT NULL DEFAULT 'HALF_UP',
+    effective_date DATE         NOT NULL,
+    expire_date    DATE,
+    status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
+    PRIMARY KEY (rule_id)
+);
+
+CREATE INDEX idx_fee_rule_lookup ON fee_rule (biz_type, merchant_id, status);
+
+-- ------------------------------------------------------------
+-- 8. 日终余额快照
+--    勾稽等式：期末 = 期初 + 本期借方 - 本期贷方（借方科目；贷方科目反向）
+--    让"查询任意历史日期余额"变成 O(1)
+-- ------------------------------------------------------------
+CREATE TABLE balance_snapshot (
+    accounting_date DATE         NOT NULL,
+    account_no      VARCHAR(32)  NOT NULL,
+    opening_balance BIGINT       NOT NULL,
+    debit_amount    BIGINT       NOT NULL,
+    credit_amount   BIGINT       NOT NULL,
+    closing_balance BIGINT       NOT NULL,
+    created_at      TIMESTAMP    NOT NULL,
+    PRIMARY KEY (accounting_date, account_no)
+);

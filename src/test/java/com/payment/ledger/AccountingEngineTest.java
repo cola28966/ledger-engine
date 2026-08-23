@@ -40,10 +40,7 @@ class AccountingEngineTest {
 
     @BeforeEach
     void reset() {
-        jdbc.execute("DELETE FROM account_serial");
-        jdbc.execute("DELETE FROM accounting_entry");
-        jdbc.execute("DELETE FROM voucher");
-        jdbc.execute("UPDATE account SET balance = 0, available_balance = 0, frozen_balance = 0, version = 0");
+        LedgerTestSupport.resetAll(jdbc);
     }
 
     /** 给账户造余额：走一笔充值 */
@@ -163,8 +160,10 @@ class AccountingEngineTest {
                 .payerAccount("U0001")   // 余额为 0
                 .payeeAccount("M0001")
                 .amount(100)
+                .fee(1)                  // 100 × 60bp = 0.6 分，四舍五入为 1 分
                 .build()))
-                .isInstanceOf(LedgerException.class);
+                .isInstanceOf(LedgerException.class)
+                .hasMessageContaining("余额不足");
 
         assertThat(balanceOf("U0001")).isZero();
     }
@@ -382,8 +381,9 @@ class AccountingEngineTest {
                 .bizType(BizType.CONSUME).bizOrderNo("ORDER010")
                 .accountingDate(ACC_DATE)
                 .payerAccount("U0001").payeeAccount("M0001")
-                .amount(5000).build()))   // 可用只剩 2000
-                .isInstanceOf(LedgerException.class);
+                .amount(5000).fee(30).build()))   // 可用只剩 2000
+                .isInstanceOf(LedgerException.class)
+                .hasMessageContaining("余额不足");
     }
 
     private int countEntries() {

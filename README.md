@@ -15,16 +15,36 @@ mvn test -Dtest=BalanceValidatorTest  # 只跑某一个
 ## 项目结构
 
 ```
-domain/       实体与枚举（Account / Voucher / AccountingEntry / AccountSerial ...）
-dto/          BookingRequest / EntryCommand
-engine/       AccountingEngine  记账主流程、冲正、冻结解冻
-              EntryGenerator    业务 → 分录组
-              BalanceValidator  借贷平衡校验
-repository/   四张表的数据访问
-resources/    schema.sql 建表 · data.sql 科目树与测试账户
+domain/       实体与枚举（Account / Voucher / AccountingEntry / AccountSerial / FeeRule ...）
+dto/          BookingRequest / EntryCommand / DailyMovement
+engine/       AccountingEngine    记账主流程、冲正、冻结解冻
+              EntryGenerator      业务 → 分录组
+              BalanceValidator    借贷平衡校验
+              FeeValidator        费率复核（平衡校验的盲区补丁）
+              AccountingCalendar  会计日期的唯一权威来源
+batch/        DayEndService       日终结账：五项勾稽 + 快照 + 日切
+repository/   八张表的数据访问
+resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费规则
 ```
 
-## 六个 TODO（建议按顺序做）
+## 八张表
+
+| 表 | 作用 |
+|---|---|
+| `subject` | 会计科目树 |
+| `account` | 账户与余额 |
+| `voucher` | 记账凭证（`request_id` 唯一索引 = 幂等锚点） |
+| `accounting_entry` | 会计分录，面向财务/总账 |
+| `account_serial` | 账户流水，面向用户/商户/客服 |
+| `accounting_calendar` | 会计日历，日期状态机 OPEN→CUTTING→CLOSED |
+| `fee_rule` | 计费规则，费率以基点(bp)存整数 |
+| `balance_snapshot` | 日终余额快照 |
+
+## TODO 清单
+
+每处 TODO 的注释里写了完整要求和提示，直接看代码里的说明。
+
+### 阶段 1 · 记账引擎（已完成）
 
 | # | 位置 | 内容 | 验收 |
 |---|---|---|---|
@@ -35,10 +55,21 @@ resources/    schema.sql 建表 · data.sql 科目树与测试账户
 | 5 | `AccountingEngine.book()` | 幂等三层防护 | 见下 |
 | 6 | `AccountingEngine.doReverse()` | 冲正的全额镜像 | 见下 |
 
-3–6 做完后跑 `-Dtest=AccountingEngineTest`（14 个用例）。
-六个全部做完，`-Dtest=LedgerInvariantTest`（8 个勾稽校验）才会绿。
+3–6 做完后跑 `-Dtest=AccountingEngineTest`。
 
-每处 TODO 的注释里写了完整要求和提示，直接看代码里的说明。
+### 阶段 2 · 防线与体检
+
+| # | 位置 | 内容 | 验收 |
+|---|---|---|---|
+| 7 | `FeeValidator.calculateByRule()` | 手续费计算：基点、取整、保底、封顶 | `-Dtest=FeeValidatorTest` |
+| 8 | `AccountingCalendar.resolve()` | 会计日期裁定，拒绝往已关账日记账 | `-Dtest=AccountingCalendarTest` |
+| 9 | `DayEndService.checkTrialBalance()` | 日终试算平衡 | `-Dtest=DayEndServiceTest` |
+| 10 | `DayEndService.checkReserveInvariant()` | 备付金勾稽（监管红线） | 同上 |
+
+7、8 做完，`AccountingEngineTest` 和 `LedgerInvariantTest` 才会恢复绿——
+记账主流程现在会先过这两道防线。
+
+全部做完：**75 个测试**应当全绿。
 
 ## 几条贯穿全局的约束
 

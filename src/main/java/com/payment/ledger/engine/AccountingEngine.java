@@ -47,6 +47,8 @@ public class AccountingEngine {
     private final SerialRepository serialRepo;
     private final EntryGenerator generator;
     private final BalanceValidator validator;
+    private final FeeValidator feeValidator;
+    private final AccountingCalendar calendar;
     private final TransactionTemplate tx;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -58,6 +60,8 @@ public class AccountingEngine {
                             SerialRepository serialRepo,
                             EntryGenerator generator,
                             BalanceValidator validator,
+                            FeeValidator feeValidator,
+                            AccountingCalendar calendar,
                             PlatformTransactionManager txManager) {
         this.accountRepo = accountRepo;
         this.voucherRepo = voucherRepo;
@@ -65,6 +69,8 @@ public class AccountingEngine {
         this.serialRepo = serialRepo;
         this.generator = generator;
         this.validator = validator;
+        this.feeValidator = feeValidator;
+        this.calendar = calendar;
         this.tx = new TransactionTemplate(txManager);
     }
 
@@ -86,10 +92,16 @@ public class AccountingEngine {
         if (req.getRequestId() == null || req.getRequestId().isBlank()) {
             throw LedgerException.invalidRequest("requestId 不能为空");
         }
-        if (req.getAccountingDate() == null) {
-            // 会计日期必须显式传入，绝不在引擎内部取 now()
-            throw LedgerException.invalidRequest("accountingDate 不能为空");
-        }
+        // ── 防线一：会计日期由日历统一裁定 ──────────────────────
+        // 传了就校验（已关账/日切中一律拒绝），没传就取当前会计日。
+        // 引擎内部永远不会出现 LocalDate.now()。
+        req.setAccountingDate(calendar.resolve(req.getAccountingDate()));
+
+        // ── 防线二：费率复核 ────────────────────────────────────
+        // 借贷平衡挡不住"金额算错"——20000 = 18800 + 1200 也是平的。
+        // 这里按签约费率独立试算一遍，与上游传入的 fee 比对，不一致拒绝记账。
+        feeValidator.verify(req.getBizType(), req.getMerchantId(),
+                req.getAmount(), req.getFee(), req.getAccountingDate());
 
         String requestId = req.getRequestId();
         Voucher voucher = voucherRepo.findByRequestId(requestId);

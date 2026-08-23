@@ -60,3 +60,46 @@ INSERT INTO account VALUES ('U0002', '用户B余额户', '224101', 'U0002', 'USE
 -- 商户户
 INSERT INTO account VALUES ('M0001',        '商户M待结算户', '224102', 'M0001', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
 INSERT INTO account VALUES ('M0001_DEPOSIT','商户M保证金户', '224105', 'M0001', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+INSERT INTO account VALUES ('M0002',        '商户N待结算户', '224102', 'M0002', 'MERCHANT', 'CNY', 'CR', 0, 0, 0, 'NORMAL', FALSE, 0, NOW(), NOW());
+
+
+-- ============================================================
+-- 会计日历
+-- 2026-08-21 已关账（用于验证"禁止往已关账日期记账"）
+-- 2026-08-22 起为开放状态
+-- ============================================================
+INSERT INTO accounting_calendar VALUES ('2026-08-21', 'CLOSED', NOW(), NOW());
+INSERT INTO accounting_calendar VALUES ('2026-08-22', 'OPEN',   NOW(), NULL);
+INSERT INTO accounting_calendar VALUES ('2026-08-23', 'OPEN',   NOW(), NULL);
+INSERT INTO accounting_calendar VALUES ('2026-08-24', 'OPEN',   NOW(), NULL);
+INSERT INTO accounting_calendar VALUES ('2026-08-25', 'OPEN',   NOW(), NULL);
+
+
+-- ============================================================
+-- 计费规则
+-- rate_bp 为基点（万分之一）：60 bp = 0.6%
+-- ============================================================
+
+-- 默认规则（merchant_id 为 NULL）
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('CONSUME',           NULL, 60,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('ESCROW_CONFIRM',    NULL, 60,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+-- 提现：万分之十（0.1%），保底 1 元，封顶 25 元 —— 典型的银行代付计价方式
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('WITHDRAW_SUBMIT',   NULL, 10, 100, 2500, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+-- 免费业务：费率为 0
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('RECHARGE',          NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('TRANSFER',          NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('ESCROW_PAY',        NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('ESCROW_REFUND',     NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('WITHDRAW_SUCCESS',  NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+
+-- 商户 M0001 的专属协议价：0.38%，优于默认的 0.6%
+INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
+VALUES ('CONSUME', 'M0001', 38, 0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');

@@ -2,6 +2,7 @@ package com.payment.ledger.repository;
 
 import com.payment.ledger.domain.AccountingEntry;
 import com.payment.ledger.domain.Direction;
+import com.payment.ledger.dto.DailyMovement;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -60,5 +61,37 @@ public class EntryRepository {
                  WHERE accounting_date = ? AND direction = ?
                 """, Long.class, java.sql.Date.valueOf(accountingDate), direction.name());
         return sum == null ? 0L : sum;
+    }
+
+    /**
+     * 日终快照用：一次性聚合出当日每个账户的借贷发生额。
+     * <p>只返回当日有发生额的账户；当日无交易的账户由调用方按"期初=期末"补齐。
+     */
+    public List<DailyMovement> aggregateByAccount(LocalDate accountingDate) {
+        return jdbc.query("""
+                SELECT account_no,
+                       COALESCE(SUM(CASE WHEN direction = 'DR' THEN amount ELSE 0 END), 0) AS dr,
+                       COALESCE(SUM(CASE WHEN direction = 'CR' THEN amount ELSE 0 END), 0) AS cr
+                  FROM accounting_entry
+                 WHERE accounting_date = ?
+                 GROUP BY account_no
+                """,
+                (rs, i) -> new DailyMovement(
+                        rs.getString("account_no"), rs.getLong("dr"), rs.getLong("cr")),
+                java.sql.Date.valueOf(accountingDate));
+    }
+
+    /**
+     * 找出组内借贷不平的凭证。
+     * <p>试算平衡不通过时的第一排查手段——通常一步就能定位到问题凭证。
+     */
+    public List<String> findUnbalancedVouchers(LocalDate accountingDate) {
+        return jdbc.queryForList("""
+                SELECT voucher_no FROM accounting_entry
+                 WHERE accounting_date = ?
+                 GROUP BY voucher_no
+                HAVING SUM(CASE WHEN direction = 'DR' THEN amount ELSE 0 END)
+                    <> SUM(CASE WHEN direction = 'CR' THEN amount ELSE 0 END)
+                """, String.class, java.sql.Date.valueOf(accountingDate));
     }
 }

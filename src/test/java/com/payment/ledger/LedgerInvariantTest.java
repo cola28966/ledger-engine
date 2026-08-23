@@ -39,10 +39,7 @@ class LedgerInvariantTest {
 
     @BeforeEach
     void reset() {
-        jdbc.execute("DELETE FROM account_serial");
-        jdbc.execute("DELETE FROM accounting_entry");
-        jdbc.execute("DELETE FROM voucher");
-        jdbc.execute("UPDATE account SET balance = 0, available_balance = 0, frozen_balance = 0, version = 0");
+        LedgerTestSupport.resetAll(jdbc);
     }
 
     private void book(String reqId, BizType type, String payer, String payee, long amount, long fee) {
@@ -78,8 +75,9 @@ class LedgerInvariantTest {
         book("T1", BizType.TRANSFER,  "U0002", "U0001",  10000, 0);
         book("E1", BizType.ESCROW_PAY,"U0001", null,     20000, 0);
         book("E2", BizType.ESCROW_CONFIRM, null, "M0001",20000, 120);
-        book("W1", BizType.WITHDRAW_SUBMIT, "M0001", null, 10000, 200);
-        book("W2", BizType.WITHDRAW_SUCCESS, null, null,   9800, 0);
+        // 提现费率 10bp、保底 1 元：10000 分算出 10 分，保底抬到 100 分
+        book("W1", BizType.WITHDRAW_SUBMIT, "M0001", null, 10000, 100);
+        book("W2", BizType.WITHDRAW_SUCCESS, null, null,   9900, 0);
 
         long debit  = entryRepo.sumByDirection(ACC_DATE, Direction.DR);
         long credit = entryRepo.sumByDirection(ACC_DATE, Direction.CR);
@@ -157,15 +155,28 @@ class LedgerInvariantTest {
     }
 
     @Test
-    @DisplayName("④-c 商户提现出款：等式两边同减，勾稽不破")
+    @DisplayName("④-c 走完「充值→消费→提现→出款」全链路，勾稽依然成立")
     void reserveInvariant_withdraw() {
         book("R1", BizType.RECHARGE, null,    "U0001", 100000, 0);
-        book("C1", BizType.CONSUME,  "U0001", "M0001", 100000, 0);   // 费率为 0，避免干扰
-        book("W1", BizType.WITHDRAW_SUBMIT,  "M0001", null, 100000, 0);
-        book("W2", BizType.WITHDRAW_SUCCESS, null,    null, 100000, 0);
+        // 消费 1000 元，费率 60bp → 手续费 600 分，商户实收 99400
+        book("C1", BizType.CONSUME,  "U0001", "M0001", 100000, 600);
+        // 提现 99400 分，费率 10bp → 99 分，保底抬到 100 分，在途 99300
+        book("W1", BizType.WITHDRAW_SUBMIT,  "M0001", null, 99400, 100);
+        book("W2", BizType.WITHDRAW_SUCCESS, null,    null, 99300, 0);
 
-        assertThat(sumClientReserve()).isEqualTo(bankReserve());
-        assertThat(bankReserve()).isZero();
+        long clientReserve = sumClientReserve();
+        long bank = bankReserve();
+        long income = accountRepo.findByNo(EntryGenerator.FEE_INCOME).getBalance()
+                    + accountRepo.findByNo("WD_FEE_INCOME").getBalance();
+
+        // 客户的钱已经全部出账
+        assertThat(clientReserve).isZero();
+        // 但备付金账户里还剩 700 分 —— 那是平台两笔手续费收入，尚未划转
+        assertThat(bank).isEqualTo(700);
+        assertThat(income).isEqualTo(700);   // 支付手续费 600 + 提现手续费 100
+
+        // 完整的勾稽等式：客户备付金 = 存管户余额 - 未划转的自有收入
+        assertThat(clientReserve).isEqualTo(bank - income);
     }
 
     @Test
