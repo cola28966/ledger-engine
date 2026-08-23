@@ -59,20 +59,9 @@ public class Account {
      * @return true 表示余额增加
      */
     public boolean isIncrease(Direction entryDirection) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 3 —— 由你实现（很短，但它是整个引擎的方向判断中枢）
-        //
-        //  借(DR)和贷(CR)本身不表示增减，一笔分录到底让余额增加还是减少，
-        //  取决于这个账户自己的余额方向 balanceDirection。
-        //
-        //  想清楚这四种组合：
-        //    资产户(DR) 收到一条 DR 分录 → ?    负债户(CR) 收到一条 DR 分录 → ?
-        //    资产户(DR) 收到一条 CR 分录 → ?    负债户(CR) 收到一条 CR 分录 → ?
-        //
-        //  举例自检：用户余额户是负债户(CR)。
-        //    充值时分录是 "贷：用户余额"（CR）→ 余额应该增加
-        //    消费时分录是 "借：用户余额"（DR）→ 余额应该减少
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 3: 判断该分录让余额增加还是减少");
+        if (balanceDirection == null) {
+            throw new IllegalStateException("账户余额方向未设置: " + accountNo);
+        }
+        return balanceDirection == entryDirection;
     }
 }

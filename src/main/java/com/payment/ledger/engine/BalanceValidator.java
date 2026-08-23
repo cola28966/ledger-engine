@@ -4,6 +4,7 @@ import com.payment.ledger.domain.Direction;
 import com.payment.ledger.dto.EntryCommand;
 import com.payment.ledger.exception.LedgerException;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
 
 import java.util.List;
 
@@ -31,22 +32,45 @@ public class BalanceValidator {
      * @throws LedgerException 不平衡、金额非正、分录不足两条时抛出
      */
     public long validate(List<EntryCommand> entries) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 1 —— 由你实现（验收：BalanceValidatorTest，8 个用例）
-        //
-        //  要求：
-        //   a) 分录组为空或少于 2 条 → 抛 LedgerException.invalidRequest
-        //      提示信息需包含"有借必有贷"以外的说明即可
-        //   b) 任何一条分录金额 <= 0 → 抛 invalidRequest，
-        //      提示信息必须包含"必须为正数"
-        //      （金额永远为正，方向由 direction 表达）
-        //   c) 只有借方或只有贷方 → 抛 invalidRequest，
-        //      提示信息必须包含"有借必有贷"
-        //   d) 借方合计 != 贷方合计 → 抛 LedgerException.unbalanced(debit, credit)
-        //   e) 校验通过 → 返回借方合计（即凭证金额）
-        //
-        //  跑测试：mvn test -Dtest=BalanceValidatorTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 1: 实现借贷平衡校验");
+        if(CollectionUtils.isEmpty(entries)) {
+            throw  LedgerException.invalidRequest("借贷为空");
+        }
+        if(entries.size() < 2) {
+            throw  LedgerException.invalidRequest("借贷缺失");
+        }
+
+        boolean matchAmount = entries.stream().anyMatch(entryCommand -> entryCommand.getAmount() <= 0);
+        if(matchAmount) {
+            throw  LedgerException.invalidRequest("必须为正数");
+        }
+
+        int crCnt = 0;
+        int drCnt = 0;
+        for (EntryCommand entry : entries) {
+            if(entry.getDirection() == Direction.CR) {
+                crCnt++;
+            }else {
+                drCnt++;
+            }
+        }
+        if(crCnt == 0 || drCnt == 0){
+            throw  LedgerException.invalidRequest("有借必有贷");
+        }
+
+        long credit = 0;
+        long debit = 0;
+        for (EntryCommand entry : entries) {
+            if(entry.getDirection() == Direction.CR) {
+                credit += entry.getAmount();
+            }else {
+                debit += entry.getAmount();
+            }
+        }
+
+        if(credit != debit){
+            throw LedgerException.unbalanced(debit, credit);
+        }
+
+        return credit;
     }
 }

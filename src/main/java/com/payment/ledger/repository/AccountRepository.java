@@ -66,33 +66,22 @@ public class AccountRepository {
      * @return 影响行数
      */
     public int applyDelta(String accountNo, long delta) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 4 —— 由你实现（全项目最关键的一条 SQL）
-        //
-        //  写一条 UPDATE，同时完成三件事，返回影响行数：
-        //   a) balance 和 available_balance 各加上 delta（delta 可正可负）
-        //   b) version + 1，updated_at 刷新
-        //   c) 【核心】把下列校验全部写进 WHERE 子句，而不是先 SELECT 出来用 Java 判断：
-        //        · 账户存在且 status = 'NORMAL'
-        //        · 扣减后 balance 不能为负 —— 除非该账户 allow_negative = TRUE
-        //        · 扣减后 available_balance 不能为负 —— 同上
-        //
-        //  为什么必须写进 WHERE：
-        //    "先 SELECT 查余额、再 UPDATE 扣减" 之间存在竞态窗口，
-        //    并发下两个请求会同时读到"余额充足"然后各扣一次 → 超卖。
-        //    把条件写进 WHERE，利用数据库行锁天然保证原子性，
-        //    一次 IO 完成"检查 + 扣减"，竞态窗口彻底消失。
-        //    调用方只需判断影响行数：1 = 成功，0 = 余额不足或状态异常。
-        //
-        //  提示：注意 delta 是负数时 "balance + delta >= 0" 才是正确的判断式，
-        //        不要写成 "balance >= delta"。
-        //
-        //  验收：AccountingEngineTest 中的
-        //        insufficientBalance_shouldRollbackEverything
-        //        balanceNeverGoesNegative
-        //        frozenAmountCannotBeSpent
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 4: 实现带余额校验的条件更新");
+        return jdbc.update("""
+                UPDATE account
+                   SET balance = balance + ?,
+                       available_balance    = available_balance + ?,
+                       version           = version + 1,
+                       updated_at        = ?
+                 WHERE account_no = ?
+                   AND status     = 'NORMAL'
+                   AND (
+                        (
+                        available_balance + ? >= 0
+                            AND balance + ? >= 0
+                        )
+                            OR allow_negative = TRUE
+                            )
+                """, delta, delta, LocalDateTime.now(), accountNo, delta, delta);
     }
 
     /** 冻结：balance 不变，available → frozen */

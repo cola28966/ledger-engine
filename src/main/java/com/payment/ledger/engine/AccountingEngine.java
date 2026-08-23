@@ -19,6 +19,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * 记账引擎。整个账务系统的核心。
@@ -90,30 +91,21 @@ public class AccountingEngine {
             throw LedgerException.invalidRequest("accountingDate 不能为空");
         }
 
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 5 —— 由你实现幂等三层防护
-        //
-        //  a) 【应用层】先按 requestId 查凭证（voucherRepo.findByRequestId）。
-        //     查到了说明这个请求之前已经记过账 → 直接返回
-        //     BookingResult.idempotentHit(原凭证号)，不要再记一次。
-        //     这一层能挡住 99% 的重复请求。
-        //
-        //  b) 【事务】没查到就真正记账。用 tx.execute(status -> doBook(req))
-        //     把整组分录包在一个本地事务里——一组分录要么全部落库，要么全部不落。
-        //
-        //  c) 【DB 兜底】捕获 DuplicateKeyException。
-        //     两个线程同时通过了 a) 的检查，其中一个会在插入凭证时
-        //     撞上 request_id 的唯一索引。这时不能把异常抛给上游——
-        //     账其实已经被另一个线程记好了，应该重新查一次凭证并返回
-        //     idempotentHit。查不到才是真异常，原样抛出。
-        //
-        //  为什么值得这么费劲：
-        //    幂等接口 + 可按 requestId 查询 + 日终对账补偿，
-        //    这套组合比任何分布式事务框架都可靠，而且对账本来就要做，零额外成本。
-        //
-        //  验收：AccountingEngineTest.idempotent_sameRequestIdBooksOnce
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 5: 实现幂等三层防护");
+        String requestId = req.getRequestId();
+        Voucher voucher = voucherRepo.findByRequestId(requestId);
+        if(voucher != null){
+            return BookingResult.idempotentHit(voucher.getVoucherNo());
+        }
+
+        try{
+            return tx.execute(status -> doBook(req));
+        }catch (DuplicateKeyException e){
+            voucher = voucherRepo.findByRequestId(requestId);
+            if(voucher != null){
+                return BookingResult.idempotentHit(voucher.getVoucherNo());
+            }
+            throw e;
+        }
     }
 
     private BookingResult doBook(BookingRequest req) {
@@ -243,22 +235,11 @@ public class AccountingEngine {
             throw LedgerException.voucherNotFound(origin.getVoucherNo());
         }
 
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 6 —— 由你实现全额镜像（一行 stream 就够）
-        //
-        //  把 originEntries 里的每条分录，变成一条 EntryCommand：
-        //    账号照抄、金额照抄（全额，不是差额）、方向取反（Direction.opposite()）
-        //
-        //  为什么必须全额镜像而不是"算差额调整"：
-        //   ① 差额法会让账上出现一笔不对应任何真实业务的金额，审计链断裂
-        //   ② 用户账单上会出现无法解释的记录
-        //   ③ 一借多贷等复杂分录下，"该调多少"根本算不出来
-        //   ④ 全额镜像是唯一通用的算法：不管原分录多复杂，反向抄一遍就行
-        //
-        //  验收：AccountingEngineTest.reverse_isFullMirrorNotDelta
-        // ══════════════════════════════════════════════════════════════
         List<EntryCommand> reversed =
-                java.util.Collections.emptyList(); // TODO 6: 替换成全额镜像的结果
+                originEntries.stream().map(accountingEntry ->
+                                new EntryCommand(accountingEntry.getAccountNo(), accountingEntry.getDirection().opposite(),
+                                        accountingEntry.getAmount())
+                        ).collect(Collectors.toList());
 
         long totalAmount = validator.validate(reversed);
 

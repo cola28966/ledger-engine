@@ -92,6 +92,35 @@ class BalanceValidatorTest {
     }
 
     @Test
+    @DisplayName("大额交易：单笔 3000 万元（超 int 上限）时借方合计不能溢出")
+    void largeAmountMustNotOverflow() {
+        // int 上限 2,147,483,647 分 = 2147.48 万元
+        // 这里用 3000 万元 = 3,000,000,000 分，已经越界
+        long amount = 3_000_000_000L;
+
+        long total = validator.validate(List.of(
+                debit ("CORP_PAYER", amount),
+                credit("CORP_PAYEE", amount)));
+
+        assertThat(total).isEqualTo(amount);
+    }
+
+    @Test
+    @DisplayName("大额累加：多条分录累加后超过 int 上限，同样不能溢出")
+    void accumulatedAmountMustNotOverflow() {
+        // 每条 8 亿分（800万元），三条累加 24 亿分，超过 int 上限
+        long each = 800_000_000L;
+
+        long total = validator.validate(List.of(
+                debit ("M0001", each),
+                debit ("M0002", each),
+                debit ("M0003", each),
+                credit("BANK_RESERVE", each * 3)));
+
+        assertThat(total).isEqualTo(each * 3);
+    }
+
+    @Test
     @DisplayName("警示用例：金额算错十倍，但借贷依然是平的 —— 平衡校验的盲区")
     void balancedButWrong() {
         // 200 元订单，费率 0.6%，正确手续费应该是 1.20 元（120分）
