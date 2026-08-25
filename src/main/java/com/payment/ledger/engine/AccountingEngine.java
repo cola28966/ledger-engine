@@ -17,6 +17,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -179,39 +181,35 @@ public class AccountingEngine {
      */
     private void applyEntriesInLockOrder(String voucherNo, BizType bizType,
                                          LocalDate accountingDate, List<EntryCommand> entries) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 11 —— 由你实现（验收：DeadlockTest）
-        //
-        //  逐条调用 applyEntry(voucherNo, bizType, accountingDate, cmd, seq)，
-        //  但要同时满足两个互相矛盾的要求：
-        //
-        //   a) 落库的 entry_seq 必须保持<b>业务语义顺序</b>——
-        //      即分录在 entries 里的原始下标 + 1（借方在前、贷方在后，
-        //      财务看凭证时要能按这个顺序读）
-        //
-        //   b) 实际执行 applyEntry 的顺序，必须按 <b>accountNo 的固定顺序</b>
-        //      （字典序即可）——让任意两个并发事务的加锁路径一致，环就成不了
-        //
-        //  提示：先把 (原始seq, cmd) 配成对，再按 accountNo 排序，
-        //        遍历时用配好的 seq 而不是循环下标。
-        //
-        //  ── 为什么固定顺序能消除死锁 ─────────────────────────
-        //   死锁的成因是"环"：事务1 持有 A 等 B，事务2 持有 B 等 A。
-        //   若所有事务都按同一顺序申请锁（都先 A 后 B），
-        //   后来者只会在第一把锁上排队等待，永远形成不了环。
-        //   这是并发编程里最经典的死锁预防手段，代价只是一次排序。
-        //
-        //  ── 顺带想一层 ───────────────────────────────────────
-        //   为什么 CONSUME 从来不死锁，而 TRANSFER 会？
-        //   因为 CONSUME 的分录顺序恒定是 用户户 → 商户户 → 手续费户，
-        //   所有事务天然一致。它不死锁是运气，不是设计——
-        //   哪天有人调整了 EntryGenerator 里的分录顺序，它也会开始死锁。
-        //   这个方法就是把"运气"变成"保证"。
-        //
-        //  跑测试：mvn test -Dtest=DeadlockTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 11: 实现按账号顺序加锁");
+        List<SeqEntryCommand> commands = new ArrayList<>(entries.size());
+
+
+        for (int i = 0; i < entries.size(); i++) {
+            commands.add(new SeqEntryCommand(i + 1, entries.get(i)));
+        }
+
+        commands.sort(
+                Comparator.comparing((SeqEntryCommand item) -> item.command().getAccountNo())
+                        .thenComparingInt(SeqEntryCommand::seq)
+        );
+
+        // 3. 按排序后的顺序执行，但 entry_seq 使用原始业务 seq
+        for (SeqEntryCommand item : commands) {
+            applyEntry(
+                    voucherNo,
+                    bizType,
+                    accountingDate,
+                    item.command(),
+                    item.seq()
+            );
+        }
     }
+
+    private record SeqEntryCommand(int seq, EntryCommand command) {
+
+
+    }
+
 
     /**
      * 把一条分录落到账上：更新余额 → 写会计分录 → 写账户流水。

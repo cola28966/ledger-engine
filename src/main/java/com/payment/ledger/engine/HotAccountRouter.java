@@ -81,25 +81,11 @@ public class HotAccountRouter {
      * @return 实际参与记账的账号
      */
     public String route(String accountNo, String routingKey) {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 12 —— 由你实现（验收：HotAccountRouterTest）
-        //
-        //  a) 用 bucketCountOf(accountNo) 取桶数；<= 0 说明没配分桶，
-        //     原样返回 accountNo
-        //  b) 有分桶 → 按 routingKey 哈希选桶，返回 bucketNo(accountNo, 下标)
-        //
-        //  ── 两个必须踩准的点 ─────────────────────────────────
-        //   ① 取模要用 Math.floorMod，不能用 %。
-        //      String.hashCode() 可能返回负数，负数 % 正数在 Java 里still是负数，
-        //      会拼出 FEE_INCOME_B-5 这种不存在的账号。
-        //      floorMod 保证结果非负。
-        //
-        //   ② 路由必须是纯函数：同样的 (accountNo, routingKey) 永远得到
-        //      同一个桶。不能掺入时间、随机数、线程号、自增序列。
-        //      否则幂等重试会落到不同桶上，同一笔业务记两次账。
-        //
-        //  跑测试：mvn test -Dtest=HotAccountRouterTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 12: 实现热点账户路由");
+        int bucketCount = bucketCountOf(accountNo);
+        if(bucketCount <= 0){
+            return accountNo;
+        }
+
+        return bucketNo(accountNo, Math.floorMod(routingKey.hashCode(), bucketCount));
     }
 }
