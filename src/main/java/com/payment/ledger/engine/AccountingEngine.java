@@ -47,7 +47,7 @@ public class AccountingEngine {
     private final VoucherRepository voucherRepo;
     private final EntryRepository entryRepo;
     private final SerialRepository serialRepo;
-    private final EntryGenerator generator;
+    private final TemplateEngine templateEngine;
     private final BalanceValidator validator;
     private final FeeValidator feeValidator;
     private final AccountingCalendar calendar;
@@ -61,7 +61,7 @@ public class AccountingEngine {
                             VoucherRepository voucherRepo,
                             EntryRepository entryRepo,
                             SerialRepository serialRepo,
-                            EntryGenerator generator,
+                            TemplateEngine templateEngine,
                             BalanceValidator validator,
                             FeeValidator feeValidator,
                             AccountingCalendar calendar,
@@ -71,7 +71,7 @@ public class AccountingEngine {
         this.voucherRepo = voucherRepo;
         this.entryRepo = entryRepo;
         this.serialRepo = serialRepo;
-        this.generator = generator;
+        this.templateEngine = templateEngine;
         this.validator = validator;
         this.feeValidator = feeValidator;
         this.calendar = calendar;
@@ -127,7 +127,7 @@ public class AccountingEngine {
 
     private BookingResult doBook(BookingRequest req) {
         // 1. 生成分录组
-        List<EntryCommand> entries = generator.generate(req);
+        List<EntryCommand> entries = templateEngine.render(req);
 
         // 2. 借贷平衡校验 —— 不平衡的分录永远不允许落库
         long totalAmount = validator.validate(entries);

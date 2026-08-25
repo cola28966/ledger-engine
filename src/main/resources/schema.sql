@@ -3,6 +3,7 @@
 -- 兼容 H2 (MODE=MySQL) 与 MySQL 8.x
 -- ============================================================
 
+DROP TABLE IF EXISTS accounting_template;
 DROP TABLE IF EXISTS balance_snapshot;
 DROP TABLE IF EXISTS account_serial;
 DROP TABLE IF EXISTS accounting_entry;
@@ -180,6 +181,32 @@ CREATE INDEX idx_fee_rule_lookup ON fee_rule (biz_type, merchant_id, status);
 --    勾稽等式：期末 = 期初 + 本期借方 - 本期贷方（借方科目；贷方科目反向）
 --    让"查询任意历史日期余额"变成 O(1)
 -- ------------------------------------------------------------
+-- ------------------------------------------------------------
+-- 9. 记账模板：把「业务类型 → 分录组」的映射从代码搬进配置
+--
+--    业务类型会无限增长（新支付方式、新营销玩法、新分账模式），
+--    每加一种就改一次代码、发一次版，是账务系统最典型的效率瓶颈。
+--    配置化之后，新增业务只需插几行记录。
+--
+--    account_rule / amount_rule 是 SpEL 表达式，求值上下文为 BookingRequest：
+--      账户：payerAccount / payeeAccount / 'FEE_INCOME'（单引号为字面量）
+--      金额：amount / fee / amount - fee
+-- ------------------------------------------------------------
+CREATE TABLE accounting_template (
+    template_id    BIGINT       AUTO_INCREMENT,
+    biz_type       VARCHAR(32)  NOT NULL,
+    -- 组内序号，同时决定 entry_seq（业务语义顺序：借在前、贷在后）
+    entry_seq      INT          NOT NULL,
+    direction      VARCHAR(2)   NOT NULL,
+    account_rule   VARCHAR(128) NOT NULL,
+    amount_rule    VARCHAR(128) NOT NULL,
+    remark         VARCHAR(255),
+    status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
+    PRIMARY KEY (template_id)
+);
+
+CREATE INDEX idx_template_biz ON accounting_template (biz_type, status);
+
 CREATE TABLE balance_snapshot (
     accounting_date DATE         NOT NULL,
     account_no      VARCHAR(32)  NOT NULL,

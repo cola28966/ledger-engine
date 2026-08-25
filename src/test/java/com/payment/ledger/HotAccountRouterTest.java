@@ -33,7 +33,7 @@ class HotAccountRouterTest {
 
     @BeforeEach
     void setUp() {
-        LedgerTestSupport.resetAll(jdbc);
+        LedgerTestSupport.resetAll(jdbc, router);
         jdbc.execute("DELETE FROM account WHERE parent_account_no IS NOT NULL");
         bucketInitializer.disableBucketing(FEE);
     }

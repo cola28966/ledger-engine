@@ -33,13 +33,14 @@ class LedgerInvariantTest {
     @Autowired AccountRepository accountRepo;
     @Autowired EntryRepository entryRepo;
     @Autowired SerialRepository serialRepo;
+    @Autowired com.payment.ledger.engine.HotAccountRouter router;
     @Autowired JdbcTemplate jdbc;
 
     static final LocalDate ACC_DATE = LocalDate.of(2026, 8, 22);
 
     @BeforeEach
     void reset() {
-        LedgerTestSupport.resetAll(jdbc);
+        LedgerTestSupport.resetAll(jdbc, router);
     }
 
     private void book(String reqId, BizType type, String payer, String payee, long amount, long fee) {

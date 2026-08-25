@@ -27,18 +27,19 @@ repository/   八张表的数据访问
 resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费规则
 ```
 
-## 八张表
+## 九张表
 
 | 表 | 作用 |
 |---|---|
 | `subject` | 会计科目树 |
-| `account` | 账户与余额 |
+| `account` | 账户与余额（含热点分桶配置） |
 | `voucher` | 记账凭证（`request_id` 唯一索引 = 幂等锚点） |
 | `accounting_entry` | 会计分录，面向财务/总账 |
 | `account_serial` | 账户流水，面向用户/商户/客服 |
 | `accounting_calendar` | 会计日历，日期状态机 OPEN→CUTTING→CLOSED |
 | `fee_rule` | 计费规则，费率以基点(bp)存整数 |
 | `balance_snapshot` | 日终余额快照 |
+| `accounting_template` | 记账模板，业务类型 → 分录组的配置 |
 
 ## TODO 清单
 
@@ -76,7 +77,18 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 | 11 | `AccountingEngine.applyEntriesInLockOrder()` | 按账号固定顺序加锁，消除死锁 | `-Dtest=DeadlockTest` |
 | 12 | `HotAccountRouter.route()` | 热点账户分桶路由 | `-Dtest=HotAccountRouterTest` |
 
-全部做完：**85 个测试**应当全绿。
+### 阶段 4 · 记账模板配置化
+
+| # | 位置 | 内容 | 验收 |
+|---|---|---|---|
+| 13 | `TemplateEngine.render()` | 按配置渲染分录组，取代硬编码 switch | `-Dtest=TemplateEngineTest` |
+| 14 | `TemplateValidator.validateAll()` | 模板自检：启动时校验模板存在、可求值、自平衡 | `-Dtest=TemplateValidatorTest` |
+
+`TemplateEngineTest` 的 11 组断言逐字继承自阶段一的 `EntryGeneratorTest`
+（那时测的是硬编码 switch）。**同样的输入、同样的期望输出，实现从 switch
+换成数据库配置，结果必须完全一致**——配置化是行为不变的重构。
+
+全部做完：**93 个测试**应当全绿。
 
 ## 压测
 

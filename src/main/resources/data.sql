@@ -111,3 +111,65 @@ VALUES ('WITHDRAW_SUCCESS',  NULL,  0,  0, NULL, 'HALF_UP', '2026-01-01', NULL, 
 -- 商户 M0001 的专属协议价：0.38%，优于默认的 0.6%
 INSERT INTO fee_rule (biz_type, merchant_id, rate_bp, min_fee, max_fee, rounding_mode, effective_date, expire_date, status)
 VALUES ('CONSUME', 'M0001', 38, 0, NULL, 'HALF_UP', '2026-01-01', NULL, 'ACTIVE');
+
+
+-- ============================================================
+-- 记账模板
+--
+-- 这张表就是原先 EntryGenerator 里那个 switch，一行一条分录。
+-- account_rule / amount_rule 为 SpEL 表达式，以 BookingRequest 为求值根对象：
+--   payerAccount / payeeAccount   取请求里的账号
+--   'FEE_INCOME'                  单引号包裹的字面量，即固定账号
+--   amount / fee / amount - fee   金额表达式
+--
+-- 每一组的借贷必须自平衡 —— 由 TemplateValidator 在启动时逐个渲染校验。
+-- ============================================================
+
+-- 充值：银行卡的钱进备付金账户，平台开始欠用户
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('RECHARGE', 1, 'DR', '''BANK_RESERVE''', 'amount',  '借：银行存款-备付金存管户（资产↑）'),
+  ('RECHARGE', 2, 'CR', 'payeeAccount',     'amount',  '贷：客户备付金-用户户（负债↑）');
+
+-- 余额消费：用户 → 商户，平台抽手续费
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('CONSUME', 1, 'DR', 'payerAccount',    'amount',       '借：客户备付金-用户户（负债↓）'),
+  ('CONSUME', 2, 'CR', 'payeeAccount',    'amount - fee', '贷：客户备付金-商户待结算户（负债↑）'),
+  ('CONSUME', 3, 'CR', '''FEE_INCOME''',  'fee',          '贷：手续费收入（收入↑）');
+
+-- 用户转账：免费，负债内部转移
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('TRANSFER', 1, 'DR', 'payerAccount', 'amount', '借：付款用户户'),
+  ('TRANSFER', 2, 'CR', 'payeeAccount', 'amount', '贷：收款用户户');
+
+-- 担保下单：钱进中间户，既不属于用户也不属于商户
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('ESCROW_PAY', 1, 'DR', 'payerAccount', 'amount', '借：客户备付金-用户户'),
+  ('ESCROW_PAY', 2, 'CR', '''ESCROW''',   'amount', '贷：担保交易中间户');
+
+-- 确认收货：中间户 → 商户 + 手续费
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('ESCROW_CONFIRM', 1, 'DR', '''ESCROW''',      'amount',       '借：担保交易中间户'),
+  ('ESCROW_CONFIRM', 2, 'CR', 'payeeAccount',    'amount - fee', '贷：客户备付金-商户待结算户'),
+  ('ESCROW_CONFIRM', 3, 'CR', '''FEE_INCOME''',  'fee',          '贷：手续费收入');
+
+-- 担保退款：中间户 → 用户
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('ESCROW_REFUND', 1, 'DR', '''ESCROW''',   'amount', '借：担保交易中间户'),
+  ('ESCROW_REFUND', 2, 'CR', 'payeeAccount', 'amount', '贷：客户备付金-用户户');
+
+-- 提现提交：商户户 → 提现在途户。此刻平台资产还没减少，钱仍在备付金账户里
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('WITHDRAW_SUBMIT', 1, 'DR', 'payerAccount',       'amount',       '借：客户备付金-商户待结算户'),
+  ('WITHDRAW_SUBMIT', 2, 'CR', '''WD_TRANSIT''',     'amount - fee', '贷：提现在途户'),
+  ('WITHDRAW_SUBMIT', 3, 'CR', '''WD_FEE_INCOME''',  'fee',          '贷：提现手续费收入');
+
+-- 提现成功：提现在途户 → 银行存款。全流程唯一「平台资产真正减少」的时刻
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('WITHDRAW_SUCCESS', 1, 'DR', '''WD_TRANSIT''',   'amount', '借：提现在途户（负债↓）'),
+  ('WITHDRAW_SUCCESS', 2, 'CR', '''BANK_RESERVE''', 'amount', '贷：银行存款-备付金存管户（资产↓）');
+
+-- 退款到余额：商户承担本金，平台按比例退还手续费（两借一贷）
+INSERT INTO accounting_template (biz_type, entry_seq, direction, account_rule, amount_rule, remark) VALUES
+  ('REFUND_TO_BALANCE', 1, 'DR', 'payerAccount',   'amount - fee', '借：客户备付金-商户待结算户（负债↓）'),
+  ('REFUND_TO_BALANCE', 2, 'DR', '''FEE_INCOME''', 'fee',          '借：手续费收入（收入↓，退还部分）'),
+  ('REFUND_TO_BALANCE', 3, 'CR', 'payeeAccount',   'amount',       '贷：客户备付金-用户户（负债↑）');

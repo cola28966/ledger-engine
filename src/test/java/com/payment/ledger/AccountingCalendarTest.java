@@ -27,13 +27,14 @@ class AccountingCalendarTest {
     @Autowired AccountingCalendar calendar;
     @Autowired AccountingEngine engine;
     @Autowired VoucherRepository voucherRepo;
+    @Autowired com.payment.ledger.engine.HotAccountRouter router;
     @Autowired JdbcTemplate jdbc;
 
     static final LocalDate ACC_DATE = LedgerTestSupport.ACC_DATE;   // 2026-08-22
 
     @BeforeEach
     void reset() {
-        LedgerTestSupport.resetAll(jdbc);
+        LedgerTestSupport.resetAll(jdbc, router);
     }
 
     @Test

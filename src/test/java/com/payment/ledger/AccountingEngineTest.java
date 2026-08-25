@@ -34,13 +34,14 @@ class AccountingEngineTest {
     @Autowired VoucherRepository voucherRepo;
     @Autowired EntryRepository entryRepo;
     @Autowired SerialRepository serialRepo;
+    @Autowired com.payment.ledger.engine.HotAccountRouter router;
     @Autowired JdbcTemplate jdbc;
 
     static final LocalDate ACC_DATE = LocalDate.of(2026, 8, 22);
 
     @BeforeEach
     void reset() {
-        LedgerTestSupport.resetAll(jdbc);
+        LedgerTestSupport.resetAll(jdbc, router);
     }
 
     /** 给账户造余额：走一笔充值 */
