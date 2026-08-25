@@ -11,6 +11,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -65,38 +67,38 @@ public class TemplateValidator implements ApplicationRunner {
      * @return 问题描述列表；全部通过时为空
      */
     public List<String> validateAll() {
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 14 —— 由你实现（验收：TemplateValidatorTest）
-        //
-        //  遍历 BizType.values()，对每一种：
-        //
-        //   a) 用 sampleRequest(type) 造一个样本请求
-        //
-        //   b) 调 templateEngine.render(sample) 渲染。
-        //      抛异常就记一条问题（用 e.getMessage()），continue 到下一个，
-        //      不要让一个坏模板中断整轮检查 —— 一次性报出全部问题，
-        //      比修一个发现一个高效得多
-        //
-        //   c) 渲染结果为空 → 记问题（该业务类型没有可用模板）
-        //
-        //   d) 校验借贷平衡：分别累加 DR 与 CR 的金额，不等则记一条问题，
-        //      带上业务类型、借方合计、贷方合计
-        //
-        //  问题描述建议格式（测试断言里会检查业务类型名出现在文案中）：
-        //      "CONSUME: 借贷不平衡，借方 10000 != 贷方 9940"
-        //
-        //  ── 为什么值得单独做这一层 ───────────────────────────
-        //   BalanceValidator 已经会在记账时拦下不平衡的分录了，
-        //   但那时错误已经发生在一笔真实交易上：用户看到失败、
-        //   客服接到投诉、值班的人半夜被叫起来。
-        //   模板自检把同一个错误提前到"启动那一刻"，代价是零。
-        //
-        //   这就是配置化必须配套的东西：
-        //   <b>你把校验从编译器手里拿走了，就得自己把它建回来。</b>
-        //
-        //  跑测试：mvn test -Dtest=TemplateValidatorTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 14: 实现模板自检");
+        List<String> errorList = new ArrayList<>();
+        for (BizType type : BizType.values()) {
+            String errorMsg = null;
+            BookingRequest sample = sampleRequest(type);
+            List<EntryCommand> entryCommands = null;
+            try{
+                entryCommands = templateEngine.render(sample);
+            }catch (LedgerException ledgerException){
+                errorMsg = type + ": " + ledgerException.getMessage();
+            }
+
+
+            if(!StringUtils.hasText(errorMsg)){
+                if(CollectionUtils.isEmpty(entryCommands)) {
+                    errorMsg = type + ": " + "该业务类型没有可用模板";
+                }
+                else {
+                    long debit = TemplateValidator.sumOf(entryCommands, Direction.DR);
+                    long credit = TemplateValidator.sumOf(entryCommands, Direction.CR);
+                    if(debit != credit) {
+                        errorMsg = String.format(
+                                "%s: 借贷不平衡，借方 %d != 贷方 %d",
+                                type, debit, credit);
+                    }
+                }
+            }
+
+            if(StringUtils.hasText(errorMsg)){
+                errorList.add(errorMsg);
+            }
+        }
+        return errorList;
     }
 
     /** 造一个用于自检的样本请求 */

@@ -1,6 +1,7 @@
 package com.payment.ledger.engine;
 
 import com.payment.ledger.domain.AccountingTemplate;
+import com.payment.ledger.domain.Direction;
 import com.payment.ledger.dto.BookingRequest;
 import com.payment.ledger.dto.EntryCommand;
 import com.payment.ledger.exception.LedgerException;
@@ -12,11 +13,13 @@ import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.SimpleEvaluationContext;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 记账模板引擎：按配置把业务请求渲染成分录组。
@@ -76,36 +79,25 @@ public class TemplateEngine {
             throw LedgerException.invalidRequest("手续费必须在 [0, amount] 区间内");
         }
 
-        // ══════════════════════════════════════════════════════════════
-        //  TODO 13 —— 由你实现（验收：TemplateEngineTest，断言与阶段一完全一致）
-        //
-        //  a) 用 templateRepo.findByBizType(req.getBizType().name()) 取模板。
-        //     取不到 → 抛 LedgerException("TEMPLATE_NOT_FOUND", ...)，
-        //     提示信息需包含"未配置记账模板"。
-        //     绝不能返回空列表——那会让错误在 BalanceValidator 那里变成
-        //     "借贷为空"，把"忘了配模板"伪装成"分录有问题"。
-        //
-        //  b) 逐条渲染：
-        //       账号 = evalString(t.getAccountRule(), req)
-        //       金额 = evalAmount(t.getAmountRule(), req)
-        //       方向 = t.getDirection()
-        //     用 new EntryCommand(账号, 方向, 金额) 组装。
-        //     两个 eval 方法已经写好，直接调用即可。
-        //
-        //  c) 滤掉金额 <= 0 的分录（fee = 0 的业务不该在账上留一条 0 元记录）
-        //
-        //  d) 保持模板的 entry_seq 顺序 —— findByBizType 已按其排序，
-        //     照原顺序遍历即可
-        //
-        //  ── 验收标准就是"什么都没变" ─────────────────────────
-        //   TemplateEngineTest 的 11 组断言，逐字继承自阶段一的 EntryGeneratorTest
-        //   （那时测的是硬编码 switch）。同样的输入、同样的期望输出，
-        //   实现从 switch 换成数据库配置，结果必须完全一致。
-        //   配置化是行为不变的重构：如果断言需要改，说明改的不是实现而是行为。
-        //
-        //  跑测试：mvn test -Dtest=TemplateEngineTest
-        // ══════════════════════════════════════════════════════════════
-        throw new UnsupportedOperationException("TODO 13: 实现模板渲染");
+        List<AccountingTemplate> accountingTemplateList = templateRepo.findByBizType(req.getBizType().name());
+        if (CollectionUtils.isEmpty(accountingTemplateList)) {
+            throw LedgerException.templateNotFound("未配置记账模板: " + req.getBizType());
+        }
+
+        List<EntryCommand> entryCommandList = new ArrayList<>(accountingTemplateList.size());
+        for (AccountingTemplate accountingTemplate : accountingTemplateList) {
+            String accNo = evalString(accountingTemplate.getAccountRule(), req);
+            long amount = evalAmount(accountingTemplate.getAmountRule(), req);
+            Direction direction = accountingTemplate.getDirection();
+            entryCommandList.add(new EntryCommand(accNo, direction, amount));
+        }
+
+        entryCommandList = entryCommandList.stream().filter(entryCommand -> entryCommand.getAmount() > 0).collect(Collectors.toList());
+
+        if (entryCommandList.isEmpty()) {
+            throw LedgerException.templateRenderEmpty("模板渲染结果为空（模板已配置，但所有分录金额均为 0）: " + req.getBizType());
+        }
+        return entryCommandList;
     }
 
     /** 求值出账号 */

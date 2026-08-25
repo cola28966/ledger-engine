@@ -114,6 +114,33 @@ class TemplateValidatorTest {
     }
 
     @Test
+    @DisplayName("同一个问题只报一次，不能重复计数")
+    void eachProblemReportedOnce() {
+        jdbc.update("UPDATE accounting_template SET status = 'DISABLED' WHERE biz_type = 'CONSUME'");
+        templateEngine.clearCache();
+
+        List<String> problems = validator.validateAll();
+
+        long consumeProblems = problems.stream().filter(p -> p.startsWith("CONSUME")).count();
+        assertThat(consumeProblems)
+                .as("CONSUME 只有「没配模板」这一个问题，报出来也该只有一条，实际报了：%s",
+                        problems.stream().filter(p -> p.startsWith("CONSUME")).toList())
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("模板缺失的报错要带上是哪个业务类型")
+    void missingTemplateErrorNamesBizType() {
+        jdbc.update("UPDATE accounting_template SET status = 'DISABLED' WHERE biz_type = 'CONSUME'");
+        templateEngine.clearCache();
+
+        assertThatThrownBy(() -> templateEngine.render(validator.sampleRequest(BizType.CONSUME)))
+                .isInstanceOf(LedgerException.class)
+                .hasMessageContaining("未配置记账模板")
+                .hasMessageContaining("CONSUME");
+    }
+
+    @Test
     @DisplayName("★ 未配置模板的业务类型，报「未配置记账模板」而不是「借贷为空」")
     void missingTemplateGivesClearError() {
         jdbc.update("UPDATE accounting_template SET status = 'DISABLED' WHERE biz_type = 'CONSUME'");

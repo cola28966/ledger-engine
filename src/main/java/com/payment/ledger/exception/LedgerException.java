@@ -48,4 +48,13 @@ public class LedgerException extends RuntimeException {
     public static LedgerException invalidRequest(String message) {
         return new LedgerException("INVALID_REQUEST", message);
     }
+
+
+    public static LedgerException templateNotFound(String message) {
+        return new LedgerException("TEMPLATE_NOT_FOUND", message);
+    }
+
+    public static LedgerException templateRenderEmpty(String message) {
+        return new LedgerException("TEMPLATE_RENDER_EMPTY", message);
+    }
 }
