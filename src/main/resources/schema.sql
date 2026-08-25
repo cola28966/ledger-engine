@@ -3,6 +3,8 @@
 -- 兼容 H2 (MODE=MySQL) 与 MySQL 8.x
 -- ============================================================
 
+DROP TABLE IF EXISTS recon_diff;
+DROP TABLE IF EXISTS channel_statement;
 DROP TABLE IF EXISTS accounting_template;
 DROP TABLE IF EXISTS balance_snapshot;
 DROP TABLE IF EXISTS account_serial;
@@ -217,3 +219,81 @@ CREATE TABLE balance_snapshot (
     created_at      DATETIME     NOT NULL,
     PRIMARY KEY (accounting_date, account_no)
 );
+
+-- ------------------------------------------------------------
+-- 10. 渠道对账单明细：从渠道下载的对账文件，解析后逐行落库
+--
+--     这张表是「外部事实」的镜像，代表钱在银行/渠道那一侧真实发生了什么。
+--     我方账务是「内部记录」。对账 = 两者逐笔核对。
+--
+--     落库即冻结：解析入库之后永不修改。渠道重发对账单只能新增批次，
+--     否则「昨天对平了、今天数据变了」这种事根本查不清。
+-- ------------------------------------------------------------
+CREATE TABLE channel_statement (
+    id               BIGINT       AUTO_INCREMENT,
+    -- 渠道标识：UNIONPAY / ALIPAY / WECHAT ...
+    channel_code     VARCHAR(32)  NOT NULL,
+    -- 渠道侧流水号。渠道内唯一，是补记账幂等键的来源
+    channel_trade_no VARCHAR(64)  NOT NULL,
+    -- 平台订单号 —— 双方唯一都认的匹配键
+    biz_order_no     VARCHAR(64)  NOT NULL,
+    -- 渠道的交易类型映射到我方 BizType。解析对账单时完成映射，
+    -- 差异自动修复要靠它判断该补记哪种账 —— 代收和代付补反了就是双倍窟窿
+    biz_type         VARCHAR(32)  NOT NULL,
+    -- 交易金额（分）
+    amount           BIGINT       NOT NULL,
+    -- 渠道向我方收取的通道费（分）。我方账上应有等额的成本，没有就是漏记
+    fee              BIGINT       NOT NULL DEFAULT 0,
+    -- SUCCESS 成功 / FAIL 失败
+    trade_status     VARCHAR(16)  NOT NULL,
+    -- 对账单归属日期。注意：它不一定等于我方的会计日期，跨日临界必然错开
+    statement_date   DATE         NOT NULL,
+    -- 入账账户。渠道对账单本身没有这个字段，是解析入库时反查订单系统补上的。
+    -- 差异自动补记账需要它——否则知道"少了一笔钱"，却不知道该记给谁
+    our_account_no   VARCHAR(32),
+    trade_time       DATETIME,
+    created_at       DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    -- 同一渠道的同一笔流水只允许入库一次：挡住对账单重复导入
+    CONSTRAINT uk_stmt_trade UNIQUE (channel_code, channel_trade_no)
+);
+
+CREATE INDEX idx_stmt_lookup ON channel_statement (statement_date, channel_code);
+CREATE INDEX idx_stmt_order ON channel_statement (biz_order_no);
+
+-- ------------------------------------------------------------
+-- 11. 对账差异表：对账的产物
+--
+--     对账不产出「对账单」，产出的是「差异清单」——对平的部分不需要留痕，
+--     不平的部分每一条都必须能追踪到闭环。
+--
+--     status 是一个状态机：PENDING → AUTO_REPAIRED / MANUAL_RESOLVED / IGNORED。
+--     对账批次可以重跑，但重跑绝不能把人工处理结果冲掉。
+-- ------------------------------------------------------------
+CREATE TABLE recon_diff (
+    diff_id           BIGINT       AUTO_INCREMENT,
+    recon_date        DATE         NOT NULL,
+    channel_code      VARCHAR(32)  NOT NULL,
+    biz_order_no      VARCHAR(64)  NOT NULL,
+    channel_trade_no  VARCHAR(64),
+    -- OUR_MORE 我方单边 / CHANNEL_MORE 渠道单边 / AMOUNT_MISMATCH 金额不符
+    -- / FEE_MISMATCH 手续费不符 / STATUS_MISMATCH 状态不符
+    diff_type         VARCHAR(32)  NOT NULL,
+    our_amount        BIGINT       NOT NULL DEFAULT 0,
+    channel_amount    BIGINT       NOT NULL DEFAULT 0,
+    our_fee           BIGINT       NOT NULL DEFAULT 0,
+    channel_fee       BIGINT       NOT NULL DEFAULT 0,
+    our_voucher_no    VARCHAR(40),
+    -- PENDING 待处理 / AUTO_REPAIRED 已自动补记 / MANUAL_RESOLVED 已人工处理 / IGNORED 已忽略
+    status            VARCHAR(16)  NOT NULL,
+    -- 自动补记账产生的凭证号，形成「差异 → 处理动作」的审计链
+    repair_voucher_no VARCHAR(40),
+    remark            VARCHAR(255),
+    created_at        DATETIME     NOT NULL,
+    PRIMARY KEY (diff_id),
+    -- 一个批次里同一笔订单只允许有一条差异记录。
+    -- 这是「重跑幂等」的数据库兜底：应用层忘了去重，这里会直接拒绝
+    CONSTRAINT uk_recon_diff UNIQUE (recon_date, channel_code, biz_order_no)
+);
+
+CREATE INDEX idx_recon_batch ON recon_diff (recon_date, channel_code, status);

@@ -22,12 +22,13 @@ engine/       AccountingEngine    记账主流程、冲正、冻结解冻
               BalanceValidator    借贷平衡校验
               FeeValidator        费率复核（平衡校验的盲区补丁）
               AccountingCalendar  会计日期的唯一权威来源
+recon/        ReconService        渠道对账：双向核对、差异定性、自动补记账
 batch/        DayEndService       日终结账：五项勾稽 + 快照 + 日切
 repository/   八张表的数据访问
 resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费规则
 ```
 
-## 九张表
+## 十一张表
 
 | 表 | 作用 |
 |---|---|
@@ -40,6 +41,8 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 | `fee_rule` | 计费规则，费率以基点(bp)存整数 |
 | `balance_snapshot` | 日终余额快照 |
 | `accounting_template` | 记账模板，业务类型 → 分录组的配置 |
+| `channel_statement` | 渠道对账单明细，外部事实的镜像（只插不改） |
+| `recon_diff` | 对账差异，状态机 PENDING → AUTO_REPAIRED / MANUAL_RESOLVED / IGNORED |
 
 ## TODO 清单
 
@@ -88,7 +91,27 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 （那时测的是硬编码 switch）。**同样的输入、同样的期望输出，实现从 switch
 换成数据库配置，结果必须完全一致**——配置化是行为不变的重构。
 
-全部做完：**93 个测试**应当全绿。
+### 阶段 5 · 渠道对账
+
+| # | 位置 | 内容 | 验收 |
+|---|---|---|---|
+| 15 | `ReconService.classify()` | 单笔定性：单边、金额、手续费、状态、在途 | `-Dtest=ReconClassifyTest` |
+| 16 | `ReconService.reconcile()` | 双向核对 + 重跑幂等 | `-Dtest=ReconServiceTest` |
+| 17 | `ReconService.autoRepair()` | 差异自动补记账 | 同上 |
+
+前四个阶段做的都是「让账记对」，对账做的是「**证明**账记对了」。
+
+日终的五项勾稽全是**内部自洽**校验——它们能证明账本自身没有矛盾，
+证明不了账本描述的事情真的发生过。一笔充值的回调丢了、我方完全没记账：
+
+```
+借贷平衡 ✓   余额与流水一致 ✓   备付金勾稽 ✓   五项全过
+```
+
+因为压根没有这条记录，账本内部当然自洽。而用户的钱已经从银行卡扣走了。
+**只有引入外部事实（渠道对账单）才能发现这一类。**
+
+全部做完：**125 个测试**应当全绿。
 
 ## 压测
 
