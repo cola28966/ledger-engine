@@ -9,8 +9,6 @@ import com.payment.ledger.engine.AccountingEngine;
 import com.payment.ledger.repository.ChannelStatementRepository;
 import com.payment.ledger.repository.ReconRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.logging.log4j.util.Strings;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -93,21 +91,20 @@ public class ReconService {
 
     public DiffType classify(OurRecord our, ChannelStatement channel) {
         if(our == null && channel == null) {
-            throw new UnsupportedOperationException("recon our and channel is null");
+            throw new IllegalArgumentException("recon our and channel is null");
         }
 
         DiffType resDiffType = DiffType.MATCHED;
-        ChannelTradeStatus tradeStatus = channel.getTradeStatus();
         if(our != null && our.status() == VoucherStatus.PROCESSING){
             resDiffType = DiffType.IN_TRANSIT;
         }
         else if(our != null && channel == null){
             resDiffType =  DiffType.OUR_MORE;
-        }else if(our == null && channel != null){
-            resDiffType = tradeStatus == ChannelTradeStatus.SUCCESS ? DiffType.CHANNEL_MORE : DiffType.MATCHED;;
-        }else if(our != null && channel != null){
-            if(tradeStatus == ChannelTradeStatus.FAIL){
-                resDiffType = DiffType.MATCHED;
+        }else if(our == null){
+            resDiffType = channel.getTradeStatus() == ChannelTradeStatus.SUCCESS ? DiffType.CHANNEL_MORE : DiffType.MATCHED;
+        }else {
+            if(channel.getTradeStatus() == ChannelTradeStatus.FAIL){
+                resDiffType = DiffType.STATUS_MISMATCH;
             }else if(our.amount() != channel.getAmount()){
                 resDiffType = DiffType.AMOUNT_MISMATCH;
             }else if(our.fee() != channel.getFee()){
@@ -126,7 +123,22 @@ public class ReconService {
 
         int matchedCount = 0;
         int inTransitCount = 0;
-        Map<String, OurRecord> bizOrderOurRecordMap = ourRecordList.stream().collect(Collectors.toMap(OurRecord::bizOrderNo, Function.identity()));
+        // bizOrderNo 不唯一：幂等键是 requestId，同一订单被记两次账幂等挡不住。
+        // 这里合并保留一笔，避免整个批次崩在读数据这一步。
+        //
+        // 注意这只是权宜：重复入账本身就是对账该发现的差异，而 error 日志
+        // 没有推动闭环的能力——没人处理它，它就只是一行日志。
+        // 彻底的做法是加一种 DiffType，走差异表 + 人工处理流程。
+        Map<String, OurRecord> bizOrderOurRecordMap = ourRecordList.stream()
+                .collect(Collectors.toMap(
+                        OurRecord::bizOrderNo,
+                        Function.identity(),
+                        (kept, dropped) -> {
+                            log.error("我方同一订单号存在多笔记账，疑似重复入账："
+                                            + "bizOrderNo={}, 保留={}, 丢弃={}",
+                                    kept.bizOrderNo(), kept.voucherNo(), dropped.voucherNo());
+                            return kept;
+                        }));
 
         for (ChannelStatement channelStatement : channelStatementList) {
             String bizOrderNo = channelStatement.getBizOrderNo();
@@ -157,17 +169,12 @@ public class ReconService {
         if(!CollectionUtils.isEmpty(reconDiffList)) {
             List<String> handledOrderNos = reconRepo.findHandledOrderNos(reconDate, channelCode);
             if(!CollectionUtils.isEmpty(handledOrderNos)){
-                reconDiffList = reconDiffList.stream().filter(e -> handledOrderNos.contains(e.getBizOrderNo())).collect(Collectors.toList());
+                reconDiffList = reconDiffList.stream().filter(e -> !handledOrderNos.contains(e.getBizOrderNo())).collect(Collectors.toList());
             }
         }
 
         for (ReconDiff reconDiff : reconDiffList) {
-            try{
-                reconRepo.insertDiff(reconDiff);
-            }catch (DuplicateKeyException e){
-                log.warn("reconcile duplicate  reconDiff:{}", reconDiff);
-            }
-
+            reconRepo.insertDiff(reconDiff);
         }
 
         return  new ReconSummary(reconDate, channelCode, ourRecordList.size(), channelStatementList.size(), matchedCount, inTransitCount, reconDiffList);
@@ -189,7 +196,7 @@ public class ReconService {
             String ourAccountNo = channelStatement.getOurAccountNo();
             String bizOrderNo = channelStatement.getBizOrderNo();
             long amount = channelStatement.getAmount();
-            if(bizType != BizType.RECHARGE || Strings.isBlank(ourAccountNo)) {
+            if(bizType != BizType.RECHARGE || !StringUtils.hasText(ourAccountNo)) {
                 continue;
             }
 

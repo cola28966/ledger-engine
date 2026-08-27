@@ -87,7 +87,11 @@ public class ReconRepository {
                 + " WHERE v.accounting_date BETWEEN ? AND ?"
                 + "   AND v.reverse_of IS NULL"
                 + "   AND v.status IN ('SUCCESS','PROCESSING')"
-                + "   AND v.biz_type IN (" + inClause + ")";
+                + "   AND v.biz_type IN (" + inClause + ")"
+                // 结果顺序必须稳定：同一订单号出现多笔时，上层要靠顺序决定保留哪一笔。
+                // 不排序的话，同样的数据重跑可能得到不同的对账结果——
+                // 批处理最难排查的一类问题，就是「重跑一次就好了」。
+                + " ORDER BY v.voucher_no";
 
         return jdbc.query(sql,
                 (ResultSet rs, int n) -> new OurRecord(

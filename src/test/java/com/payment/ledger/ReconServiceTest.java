@@ -268,6 +268,59 @@ class ReconServiceTest {
         assertThat(after.get(0).getRemark()).contains("已与渠道确认");
     }
 
+    @Test
+    @DisplayName("★★ 跳过已处理的，不能连带把新差异一起丢掉")
+    void handledDiffMustNotSwallowNewOnes() {
+        // 上一个用例只有一笔差异，且它恰好就是被人工处理的那笔——
+        // 「跳过已处理」的判断写反了也照样能过。必须再加一笔全新的差异才能分辨。
+        channelRow("CH_A", "ORD_A", 11111);
+        recon.reconcile(D, CH);
+        ReconDiff a = reconRepo.findDiffs(D, CH).get(0);
+        reconRepo.markHandled(a.getDiffId(), DiffStatus.MANUAL_RESOLVED, null, "已与渠道确认");
+
+        // 渠道对账单里又多出一笔全新的
+        channelRow("CH_B", "ORD_B", 22222);
+        ReconSummary s = recon.reconcile(D, CH);
+
+        assertThat(s.diffCount())
+                .as("本次只该报新出现的 ORD_B，实际报出：%s",
+                        s.diffs().stream().map(ReconDiff::getBizOrderNo).toList())
+                .isEqualTo(1);
+        assertThat(s.diffs().get(0).getBizOrderNo()).isEqualTo("ORD_B");
+
+        // 而且要真的落库，不能只活在内存里
+        assertThat(reconRepo.findDiffs(D, CH))
+                .extracting(ReconDiff::getBizOrderNo)
+                .containsExactlyInAnyOrder("ORD_A", "ORD_B");
+    }
+
+    @Test
+    @DisplayName("★ 我方同一订单号记了两笔 → 对账不能崩在读数据这一步")
+    void duplicateBizOrderDoesNotKillTheBatch() {
+        // 幂等键是 requestId，bizOrderNo 不唯一 —— 同一订单被记两次账幂等挡不住。
+        // 而这正是对账该发现的「我方重复入账」。
+        engine.book(BookingRequest.builder()
+                .requestId("REQ_A").bizType(BizType.RECHARGE).bizOrderNo("ORD_DUP")
+                .accountingDate(D).payeeAccount("U0001").amount(10000).fee(0).build());
+        engine.book(BookingRequest.builder()
+                .requestId("REQ_B").bizType(BizType.RECHARGE).bizOrderNo("ORD_DUP")
+                .accountingDate(D).payeeAccount("U0001").amount(10000).fee(0).build());
+        channelRow("CH_DUP", "ORD_DUP", 10000);
+
+        ReconSummary s = recon.reconcile(D, CH);
+
+        // 批次要跑完，不能抛 IllegalStateException：
+        // 崩在这里的话，值班的人第二天看到的是「任务失败」而不是「发现重复入账」，
+        // 于是去查程序 bug，真正的资损躺在账上没人管
+        assertThat(s.ourCount()).isEqualTo(2);
+        assertThat(s.channelCount()).isEqualTo(1);
+
+        // 已知局限：重复的那一笔只进了 error 日志，没有进差异表。
+        // 彻底的做法是加一种 DiffType，走差异表 + 人工处理流程。
+        assertThat(s.matchedCount()).isEqualTo(1);
+        assertThat(s.balanced()).isTrue();
+    }
+
     // ================================================================
     //  自动修复
     // ================================================================
