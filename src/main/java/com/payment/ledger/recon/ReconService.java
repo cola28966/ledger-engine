@@ -1,22 +1,24 @@
 package com.payment.ledger.recon;
 
-import com.payment.ledger.domain.BizType;
-import com.payment.ledger.domain.ChannelStatement;
-import com.payment.ledger.domain.DiffStatus;
-import com.payment.ledger.domain.DiffType;
-import com.payment.ledger.domain.ReconDiff;
+import com.payment.ledger.domain.*;
+import com.payment.ledger.dto.BookingRequest;
+import com.payment.ledger.dto.BookingResult;
 import com.payment.ledger.dto.OurRecord;
 import com.payment.ledger.dto.ReconSummary;
 import com.payment.ledger.engine.AccountingEngine;
 import com.payment.ledger.repository.ChannelStatementRepository;
 import com.payment.ledger.repository.ReconRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.logging.log4j.util.Strings;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 渠道对账。
@@ -89,169 +91,125 @@ public class ReconService {
         this.engine = engine;
     }
 
-    // ================================================================
-    //  TODO 15：单笔定性
-    // ================================================================
-
-    /**
-     * 判断一笔的对账结果。
-     *
-     * <p><b>TODO 15：实现这个方法。</b>
-     *
-     * <p>入参两侧都可能为 null，代表"这一侧没有这笔记录"。
-     * 返回 {@link DiffType}，<b>一笔只返回一种</b>——
-     * 一笔既金额不符又手续费不符时，只报最严重的那个。
-     * 把所有异常维度都报出来，只会让告警从"3 条真问题"变成"30 条噪音"。
-     *
-     * <p>规则（<b>优先级从高到低，命中即返回</b>）：
-     * <ol>
-     *   <li>两侧都为 null —— 调用方传错了，抛 {@link IllegalArgumentException}</li>
-     *   <li>我方凭证处于 {@code PROCESSING} → {@link DiffType#IN_TRANSIT}。
-     *       <b>不管渠道侧是什么状态</b>。我方自己都还没到终态，
-     *       此刻拿它和渠道比对没有意义，等下一批</li>
-     *   <li>只有我方有 → {@link DiffType#OUR_MORE}</li>
-     *   <li>只有渠道有：
-     *       <ul>
-     *         <li>渠道 {@code SUCCESS} → {@link DiffType#CHANNEL_MORE}</li>
-     *         <li>渠道 {@code FAIL} → {@link DiffType#MATCHED}
-     *             （渠道认为没成、我方也没记账，两边说的是同一件事，这不是差异）</li>
-     *       </ul></li>
-     *   <li>两侧都有：
-     *       <ul>
-     *         <li>渠道 {@code FAIL} → {@link DiffType#STATUS_MISMATCH}
-     *             （能走到这里说明我方是 SUCCESS）</li>
-     *         <li>金额不等 → {@link DiffType#AMOUNT_MISMATCH}</li>
-     *         <li>手续费不等 → {@link DiffType#FEE_MISMATCH}</li>
-     *         <li>否则 → {@link DiffType#MATCHED}</li>
-     *       </ul></li>
-     * </ol>
-     *
-     * <p><b>为什么状态要排在金额前面：</b>状态不符时，双方连"这笔交易到底成没成"
-     * 都没达成一致，此时比较金额得出的任何结论都是无意义的。
-     * 顺序写反了，一笔"我方成功 / 渠道失败"的交易会被报成金额不符，
-     * 值班的人就会去查金额计算逻辑——查一整天也查不出问题。
-     *
-     * @param our     我方记录，可能为 null
-     * @param channel 渠道记录，可能为 null
-     */
     public DiffType classify(OurRecord our, ChannelStatement channel) {
-        // TODO 15: 按上面的优先级实现单笔定性
-        throw new UnsupportedOperationException("TODO 15: 实现 classify");
+        if(our == null && channel == null) {
+            throw new UnsupportedOperationException("recon our and channel is null");
+        }
+
+        DiffType resDiffType = DiffType.MATCHED;
+        ChannelTradeStatus tradeStatus = channel.getTradeStatus();
+        if(our != null && our.status() == VoucherStatus.PROCESSING){
+            resDiffType = DiffType.IN_TRANSIT;
+        }
+        else if(our != null && channel == null){
+            resDiffType =  DiffType.OUR_MORE;
+        }else if(our == null && channel != null){
+            resDiffType = tradeStatus == ChannelTradeStatus.SUCCESS ? DiffType.CHANNEL_MORE : DiffType.MATCHED;;
+        }else if(our != null && channel != null){
+            if(tradeStatus == ChannelTradeStatus.FAIL){
+                resDiffType = DiffType.MATCHED;
+            }else if(our.amount() != channel.getAmount()){
+                resDiffType = DiffType.AMOUNT_MISMATCH;
+            }else if(our.fee() != channel.getFee()){
+                resDiffType = DiffType.FEE_MISMATCH;
+            }
+        }
+        return resDiffType;
     }
 
-    // ================================================================
-    //  TODO 16：批次对账
-    // ================================================================
-
-    /**
-     * 执行一个对账批次。
-     *
-     * <p><b>TODO 16：实现这个方法。</b>
-     *
-     * <p>步骤：
-     * <ol>
-     *   <li><b>清理本批次遗留的待处理差异</b>，用
-     *       {@link ReconRepository#deletePendingDiffs}。
-     *       对账重跑是常态，不清就会撞上 {@code uk_recon_diff} 唯一索引直接崩掉</li>
-     *   <li>取我方记录：{@link ReconRepository#findOurRecords}，
-     *       日期窗口 {@code [reconDate - TOLERANCE_DAYS, reconDate]}，
-     *       业务类型 {@link #RECON_BIZ_TYPES}</li>
-     *   <li>取渠道记录：{@link ChannelStatementRepository#findByDate}</li>
-     *   <li>两侧各自按 {@code bizOrderNo} 建索引</li>
-     *   <li>逐笔定性，调 {@link #classify}</li>
-     *   <li>{@link DiffType#needsHandling()} 为 true 的落库，状态 {@code PENDING}，
-     *       用 {@link #buildDiff} 组装。<b>但要跳过</b>
-     *       {@link ReconRepository#findHandledOrderNos} 返回的订单号——
-     *       那些已经人工处理过了，不能重复报</li>
-     *   <li>统计并返回 {@link ReconSummary}：
-     *       {@code matchedCount} / {@code inTransitCount} 按 {@link #classify} 的结果统计，
-     *       {@code ourCount} / {@code channelCount} 为两侧的原始笔数，
-     *       {@code diffs} 只装本次新落库的那些</li>
-     * </ol>
-     *
-     * <p><b>这个方法唯一的难点在第 5 步：要遍历什么。</b>
-     * 最自然的写法是遍历我方记录、逐笔去渠道那边找——
-     * 这样写出来的对账程序能跑、能出差异、看起来完全正常，
-     * 但它<b>永远发现不了"渠道有、我方没有"的那一类</b>，
-     * 因为那些订单号压根不在我方的遍历集合里。
-     *
-     * <p>而那恰恰是最该被发现的一类：钱已经从用户卡里扣走、已经到了银行账户，
-     * 我方账上却没有。用户打客服电话之前，没有任何人会知道。
-     * 前面四个阶段搭的所有防线——借贷平衡、费率复核、五项勾稽——
-     * <b>没有任何一道能发现它</b>，因为它们全都只看我方账本内部。
-     *
-     * @param reconDate   对账批次日期，也就是渠道对账单的归属日期
-     * @param channelCode 渠道标识
-     */
     public ReconSummary reconcile(LocalDate reconDate, String channelCode) {
-        // TODO 16: 实现双向核对
-        throw new UnsupportedOperationException("TODO 16: 实现 reconcile");
+        reconRepo.deletePendingDiffs(reconDate, channelCode);
+
+        List<ReconDiff> reconDiffList = new ArrayList<>();
+        List<OurRecord> ourRecordList = reconRepo.findOurRecords(reconDate.minusDays(TOLERANCE_DAYS) , reconDate, RECON_BIZ_TYPES);
+        List<ChannelStatement> channelStatementList = statementRepo.findByDate(reconDate, channelCode);
+
+        int matchedCount = 0;
+        int inTransitCount = 0;
+        Map<String, OurRecord> bizOrderOurRecordMap = ourRecordList.stream().collect(Collectors.toMap(OurRecord::bizOrderNo, Function.identity()));
+
+        for (ChannelStatement channelStatement : channelStatementList) {
+            String bizOrderNo = channelStatement.getBizOrderNo();
+            OurRecord ourRecord = bizOrderOurRecordMap.get(bizOrderNo);
+            DiffType diffType = classify(ourRecord, channelStatement);
+            boolean needsHandling = diffType.needsHandling();
+            if(needsHandling){
+                ReconDiff reconDiff = buildDiff(reconDate, channelCode, diffType, ourRecord, channelStatement);
+                reconDiffList.add(reconDiff);
+            }
+            else if(diffType == DiffType.IN_TRANSIT){
+                inTransitCount++;
+            }else if(diffType == DiffType.MATCHED){
+                matchedCount++;
+            }
+            bizOrderOurRecordMap.remove(bizOrderNo);
+        }
+
+        inTransitCount += bizOrderOurRecordMap.values().stream().filter(e -> e.status() == VoucherStatus.PROCESSING).count();
+        for (OurRecord stringOurRecordEntry : bizOrderOurRecordMap.values()) {
+            if(stringOurRecordEntry.status() == VoucherStatus.SUCCESS){
+                DiffType diffType = DiffType.OUR_MORE;
+                ReconDiff reconDiff = buildDiff(reconDate, channelCode, diffType, stringOurRecordEntry, null);
+                reconDiffList.add(reconDiff);
+            }
+        }
+
+        if(!CollectionUtils.isEmpty(reconDiffList)) {
+            List<String> handledOrderNos = reconRepo.findHandledOrderNos(reconDate, channelCode);
+            if(!CollectionUtils.isEmpty(handledOrderNos)){
+                reconDiffList = reconDiffList.stream().filter(e -> handledOrderNos.contains(e.getBizOrderNo())).collect(Collectors.toList());
+            }
+        }
+
+        for (ReconDiff reconDiff : reconDiffList) {
+            try{
+                reconRepo.insertDiff(reconDiff);
+            }catch (DuplicateKeyException e){
+                log.warn("reconcile duplicate  reconDiff:{}", reconDiff);
+            }
+
+        }
+
+        return  new ReconSummary(reconDate, channelCode, ourRecordList.size(), channelStatementList.size(), matchedCount, inTransitCount, reconDiffList);
     }
 
-    // ================================================================
-    //  TODO 17：差异自动修复
-    // ================================================================
-
-    /**
-     * 对可自动修复的差异补记账。
-     *
-     * <p><b>TODO 17：实现这个方法。</b>
-     *
-     * <p>报出差异只完成了对账的一半。剩下一半是让每条差异走到终态，
-     * 否则差异表会越积越多，最后没人看——和没有对账是一样的。
-     *
-     * <p>步骤：
-     * <ol>
-     *   <li>取本批次 {@link DiffType#CHANNEL_MORE} 且 {@link DiffStatus#PENDING} 的差异
-     *       （{@link ReconRepository#findDiffsByTypeAndStatus}）</li>
-     *   <li>逐条用 {@code channelTradeNo} 取回渠道原始记录
-     *       （{@link ChannelStatementRepository#findByTradeNo}）</li>
-     *   <li>不满足自动修复条件的<b>原样跳过</b>，保持 PENDING 等人工：
-     *       <ul>
-     *         <li>渠道记录的 {@code bizType} 不是 {@link BizType#RECHARGE}</li>
-     *         <li>{@code ourAccountNo} 为空</li>
-     *       </ul></li>
-     *   <li>满足条件的调 {@link AccountingEngine#book} 补记一笔充值：
-     *       <ul>
-     *         <li>{@code requestId} = {@link #repairRequestId}</li>
-     *         <li>{@code accountingDate} = <b>null</b></li>
-     *         <li>{@code bizOrderNo} = 渠道记录的 {@code bizOrderNo}
-     *             （补记的这笔要能在下次对账时和渠道那行匹配上，
-     *             另起一个订单号等于制造一笔新的我方单边账）</li>
-     *         <li>{@code payeeAccount} = 渠道记录的 {@code ourAccountNo}</li>
-     *         <li>{@code amount} = <b>渠道金额</b>，{@code fee} = 0</li>
-     *       </ul></li>
-     *   <li>回写 {@link ReconRepository#markHandled}
-     *       为 {@link DiffStatus#AUTO_REPAIRED}，带上补记的凭证号。
-     *       <b>影响行数为 0 说明这条已被人抢先处理，不计入修复数</b></li>
-     *   <li>返回成功修复的笔数</li>
-     * </ol>
-     *
-     * <h3>三个不能想当然的点</h3>
-     *
-     * <p><b>① 幂等键必须由渠道流水号派生。</b>用 UUID 或时间戳，
-     * 对账重跑一次就补记一次，一个窟窿补成三笔重复入账。
-     * 而这类重复记账<b>不会被任何勾稽发现</b>——每一笔自己都是借贷平衡的。
-     * {@link #repairRequestId} 已经写好，用它。
-     *
-     * <p><b>② 会计日期传 null，不是 reconDate。</b>对账通常在 T+1 跑，
-     * 那时 T 日多半已经关账了。补记账要记在<b>发现日</b>，不是交易日——
-     * 和冲正的规则完全一致：已关账的会计期间禁止追溯写入。
-     * 传 null 会由 {@code AccountingCalendar} 裁定为当前会计日。
-     *
-     * <p><b>③ 只有 CHANNEL_MORE 可以自动修，这条边界必须写死在代码里。</b>
-     * 为什么只有它：{@code CHANNEL_MORE} 意味着"钱确实到了银行账户"——
-     * 这是一个由外部事实确定的、不需要猜的结论，补记账只是让账本追上现实。
-     * 其余几类都建立在"某一侧算错了"之上，在没搞清楚哪一侧错、错在哪之前，
-     * 任何自动动作都是在<b>用一个错误覆盖另一个错误</b>。
-     * 尤其是 {@code AMOUNT_MISMATCH}：自动按渠道金额调平，
-     * 会把我方计算逻辑的 bug 悄悄抹掉，等到下个月发现时已经错了几十万笔。
-     *
-     * @return 成功补记账的笔数
-     */
     public int autoRepair(LocalDate reconDate, String channelCode) {
-        // TODO 17: 实现差异自动修复
-        throw new UnsupportedOperationException("TODO 17: 实现 autoRepair");
+        List<ReconDiff> reconDiffList = reconRepo.findDiffsByTypeAndStatus(reconDate, channelCode, DiffType.CHANNEL_MORE, DiffStatus.PENDING);
+
+        int autoRepairCnt = 0;
+        for (ReconDiff reconDiff : reconDiffList) {
+            String channelTradeNo = reconDiff.getChannelTradeNo();
+
+            ChannelStatement channelStatement = statementRepo.findByTradeNo(channelCode, channelTradeNo);
+            if(channelStatement == null) {
+                continue;
+            }
+
+            BizType bizType = channelStatement.getBizType();
+            String ourAccountNo = channelStatement.getOurAccountNo();
+            String bizOrderNo = channelStatement.getBizOrderNo();
+            long amount = channelStatement.getAmount();
+            if(bizType != BizType.RECHARGE || Strings.isBlank(ourAccountNo)) {
+                continue;
+            }
+
+            String repairRequestId = repairRequestId(channelCode, channelTradeNo);
+            BookingRequest bookingRequest = BookingRequest.builder()
+                    .requestId(repairRequestId)
+                    .bizType(BizType.RECHARGE)
+                    .bizOrderNo(bizOrderNo)
+                    .accountingDate(null)
+                    .amount(amount)
+                    .payeeAccount(ourAccountNo)
+                    .build();
+            BookingResult book = engine.book(bookingRequest);
+            int updatedCnt = reconRepo.markHandled(reconDiff.getDiffId(), DiffStatus.AUTO_REPAIRED, book.getVoucherNo(),"多帐自动差异修复");
+            if(updatedCnt > 0) {
+                autoRepairCnt++;
+            }
+        }
+
+        return autoRepairCnt;
     }
 
     // ================================================================

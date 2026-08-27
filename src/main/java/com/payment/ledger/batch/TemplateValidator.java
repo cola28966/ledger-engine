@@ -45,15 +45,7 @@ public class TemplateValidator implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        List<String> problems;
-        try {
-            problems = validateAll();
-        } catch (UnsupportedOperationException todoNotDone) {
-            // TODO 14 尚未实现时跳过自检，以免应用无法启动、其余测试全部受阻。
-            // 实现完成后这个分支就不会再走到。
-            log.warn("模板自检尚未实现（TODO 14），本次跳过");
-            return;
-        }
+        List<String> problems = validateAll();;
         if (!problems.isEmpty()) {
             throw new IllegalStateException(
                     "记账模板自检未通过，拒绝启动：\n  " + String.join("\n  ", problems));
