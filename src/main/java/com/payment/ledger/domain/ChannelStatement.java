@@ -59,5 +59,12 @@ public class ChannelStatement {
      */
     private String ourAccountNo;
 
+    /**
+     * 渠道侧「这一笔之后」的账户余额，单位：分。
+     * <p>为 null 表示该渠道不提供逐笔余额（不是所有渠道都给）。
+     * 有它才能做逐笔余额连续性——那是唯一能定位到「从哪一笔开始错」的检查。
+     */
+    private Long balanceAfter;
+
     private LocalDateTime tradeTime;
 }

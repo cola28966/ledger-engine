@@ -30,6 +30,7 @@ public final class LedgerTestSupport {
 
     public static void resetAll(JdbcTemplate jdbc, HotAccountRouter router) {
         jdbc.execute("DELETE FROM recon_diff");
+        jdbc.execute("DELETE FROM channel_balance");
         jdbc.execute("DELETE FROM channel_statement");
         jdbc.execute("DELETE FROM balance_snapshot");
         jdbc.execute("DELETE FROM account_serial");

@@ -29,7 +29,9 @@ public class ChannelStatementRepository {
 
     private static final RowMapper<ChannelStatement> MAPPER = (ResultSet rs, int i) -> {
         Timestamp tradeTime = rs.getTimestamp("trade_time");
+        long balanceAfter = rs.getLong("balance_after");
         return ChannelStatement.builder()
+                .balanceAfter(rs.wasNull() ? null : balanceAfter)
                 .id(rs.getLong("id"))
                 .channelCode(rs.getString("channel_code"))
                 .channelTradeNo(rs.getString("channel_trade_no"))
@@ -54,13 +56,15 @@ public class ChannelStatementRepository {
         jdbc.update("""
                 INSERT INTO channel_statement
                     (channel_code, channel_trade_no, biz_order_no, biz_type, amount, fee,
-                     trade_status, statement_date, our_account_no, trade_time, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     trade_status, statement_date, our_account_no, balance_after,
+                     trade_time, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 s.getChannelCode(), s.getChannelTradeNo(), s.getBizOrderNo(),
                 s.getBizType().name(),
                 s.getAmount(), s.getFee(), s.getTradeStatus().name(),
                 java.sql.Date.valueOf(s.getStatementDate()), s.getOurAccountNo(),
+                s.getBalanceAfter(),
                 s.getTradeTime(), LocalDateTime.now());
     }
 
@@ -69,6 +73,27 @@ public class ChannelStatementRepository {
         return jdbc.query("""
                 SELECT * FROM channel_statement
                  WHERE statement_date = ? AND channel_code = ?
+                """, MAPPER, java.sql.Date.valueOf(statementDate), channelCode);
+    }
+
+    /**
+     * 取某日某渠道的明细，<b>按入库顺序返回</b>（{@code ORDER BY id}）。
+     *
+     * <p>逐笔余额连续性必须用这个，不能用 {@link #findByDate}，也<b>绝不能按交易时间排序</b>。
+     *
+     * <p>渠道账单是按余额变动顺序输出的，而"交易时间"通常只精确到秒——
+     * 同一秒里可能有几十笔。按时间重排会把渠道原本正确的顺序打乱，
+     * 真实数据实测过：原始顺序 1 处断裂，按时间排序后变成 12012 处。
+     *
+     * <p>所以解析入库时必须<b>逐行顺序插入</b>，让自增 id 承载文件的原始行序。
+     * 并发解析、多线程入库都会毁掉这个前提。
+     */
+    public List<ChannelStatement> findByDateInFileOrder(java.time.LocalDate statementDate,
+                                                        String channelCode) {
+        return jdbc.query("""
+                SELECT * FROM channel_statement
+                 WHERE statement_date = ? AND channel_code = ?
+                 ORDER BY id
                 """, MAPPER, java.sql.Date.valueOf(statementDate), channelCode);
     }
 

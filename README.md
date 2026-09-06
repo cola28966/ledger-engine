@@ -22,13 +22,14 @@ engine/       AccountingEngine    记账主流程、冲正、冻结解冻
               BalanceValidator    借贷平衡校验
               FeeValidator        费率复核（平衡校验的盲区补丁）
               AccountingCalendar  会计日期的唯一权威来源
-recon/        ReconService        渠道对账：双向核对、差异定性、自动补记账
+recon/        ReconService         渠道对账：双向核对、差异定性、自动补记账
+              ChannelBalanceChecker 余额连续性：单日自洽、逐笔链、跨日衔接
 batch/        DayEndService       日终结账：五项勾稽 + 快照 + 日切
-repository/   八张表的数据访问
+repository/   十二张表的数据访问
 resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费规则
 ```
 
-## 十一张表
+## 十二张表
 
 | 表 | 作用 |
 |---|---|
@@ -43,6 +44,7 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 | `accounting_template` | 记账模板，业务类型 → 分录组的配置 |
 | `channel_statement` | 渠道对账单明细，外部事实的镜像（只插不改） |
 | `recon_diff` | 对账差异，状态机 PENDING → AUTO_REPAIRED / MANUAL_RESOLVED / IGNORED |
+| `channel_balance` | 渠道日终余额，余额连续性对账的数据源 |
 
 ## TODO 清单
 
@@ -98,6 +100,9 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 | 15 | `ReconService.classify()` | 单笔定性：单边、金额、手续费、状态、在途 | `-Dtest=ReconClassifyTest` |
 | 16 | `ReconService.reconcile()` | 双向核对 + 重跑幂等 | `-Dtest=ReconServiceTest` |
 | 17 | `ReconService.autoRepair()` | 差异自动补记账 | 同上 |
+| 18 | `ChannelBalanceChecker.checkDailyBalance()` | 单日余额自洽 + 明细累加 vs 汇总 | `-Dtest=ChannelBalanceCheckerTest` |
+| 19 | `ChannelBalanceChecker.checkRowContinuity()` | 逐笔余额链，定位到具体哪一笔 | 同上 |
+| 20 | `ChannelBalanceChecker.checkCrossDayContinuity()` | 跨日连续 + 缺日检测 | 同上 |
 
 前四个阶段做的都是「让账记对」，对账做的是「**证明**账记对了」。
 
@@ -111,7 +116,19 @@ resources/    schema.sql 建表 · data.sql 科目树、账户、日历、计费
 因为压根没有这条记录，账本内部当然自洽。而用户的钱已经从银行卡扣走了。
 **只有引入外部事实（渠道对账单）才能发现这一类。**
 
-全部做完：**125 个测试**应当全绿。
+而逐笔对账自己也有盲区——它只能证明「我看到的这些是对的」，
+证明不了「我该看到的都看到了」。08-19 的对账单整天没下载，
+跑 08-18 和 08-20 都完美对平，因为缺失的数据两边都不在比对范围里。
+
+TODO 18–20 补的就是这一层：**比的不是数据内部对不对，而是数据之间接不接得上。**
+
+```
+跨日连续  →  发现「整天缺了」        定位到日
+单日自洽  →  发现「这天内部对不上」   定位到日
+逐笔连续  →  定位到具体哪一笔开始断
+```
+
+全部做完：**142 个测试**应当全绿。
 
 ## 压测
 

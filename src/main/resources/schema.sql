@@ -3,6 +3,7 @@
 -- 兼容 H2 (MODE=MySQL) 与 MySQL 8.x
 -- ============================================================
 
+DROP TABLE IF EXISTS channel_balance;
 DROP TABLE IF EXISTS recon_diff;
 DROP TABLE IF EXISTS channel_statement;
 DROP TABLE IF EXISTS accounting_template;
@@ -251,6 +252,9 @@ CREATE TABLE channel_statement (
     -- 入账账户。渠道对账单本身没有这个字段，是解析入库时反查订单系统补上的。
     -- 差异自动补记账需要它——否则知道"少了一笔钱"，却不知道该记给谁
     our_account_no   VARCHAR(32),
+    -- 渠道侧「这一笔之后」的账户余额（分）。不是每个渠道都给，为 NULL 表示该渠道无此数据。
+    -- 有这一列才能做逐笔余额连续性——它是唯一能定位到「从哪一笔开始错」的检查
+    balance_after    BIGINT,
     trade_time       DATETIME,
     created_at       DATETIME     NOT NULL,
     PRIMARY KEY (id),
@@ -297,3 +301,32 @@ CREATE TABLE recon_diff (
 );
 
 CREATE INDEX idx_recon_batch ON recon_diff (recon_date, channel_code, status);
+
+-- ------------------------------------------------------------
+-- 12. 渠道日终余额：余额连续性对账的数据源
+--
+--     逐笔对账只能发现「这一笔错了」，发现不了「整天的数据没拿到」——
+--     缺失的那批数据两边都不在比对范围里，比对逻辑根本看不见它。
+--     余额连续性是唯一能抓到这类问题的检查：
+--
+--       T 日期末 != T+1 日期初  →  中间一定丢了什么
+--
+--     日终快照（balance_snapshot）做的是同一件事，只不过那个校验内部账本，
+--     这个校验渠道账单。同一条勾稽，两个数据源。
+-- ------------------------------------------------------------
+CREATE TABLE channel_balance (
+    id              BIGINT       AUTO_INCREMENT,
+    channel_code    VARCHAR(32)  NOT NULL,
+    balance_date    DATE         NOT NULL,
+    opening_balance BIGINT       NOT NULL,
+    -- 当日收入、支出合计（分）。
+    -- 两个都存正数，方向由字段名表达 —— 和「分录金额永远为正、方向由 Direction 表达」
+    -- 是同一条规矩。渠道原始文件里支出常带负号，入库时统一取绝对值
+    income_amount   BIGINT       NOT NULL,
+    expense_amount  BIGINT       NOT NULL,
+    closing_balance BIGINT       NOT NULL,
+    created_at      DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    -- 一个渠道一天只能有一条。挡住对账单重复导入导致的余额重复计算
+    CONSTRAINT uk_channel_balance UNIQUE (channel_code, balance_date)
+);
